@@ -4,11 +4,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"github.com/tmc/langchaingo/embeddings"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/textsplitter"
-
-	"github.com/ayanshakil/askyourbook/internal/qdrant"
 )
 
 // Options are the Service tunables; see the config package for defaults.
@@ -23,9 +20,9 @@ type Options struct {
 }
 
 type Service struct {
-	llm        llms.Model
-	embedder   embeddings.Embedder
-	qd         *qdrant.Client
+	llm        ChatModel
+	embedder   Embedder
+	qd         VectorStore
 	collection string
 	splitter   textsplitter.TextSplitter
 	workers    int
@@ -34,7 +31,7 @@ type Service struct {
 	log        *slog.Logger
 }
 
-func NewService(llm llms.Model, e embeddings.Embedder, qd *qdrant.Client, opts Options) *Service {
+func NewService(llm ChatModel, e Embedder, qd VectorStore, opts Options) *Service {
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()

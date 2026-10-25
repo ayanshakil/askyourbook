@@ -20,6 +20,7 @@ import (
 	"github.com/ayanshakil/askyourbook/internal/logging"
 	"github.com/ayanshakil/askyourbook/internal/qdrant"
 	"github.com/ayanshakil/askyourbook/internal/rag"
+	"github.com/ayanshakil/askyourbook/internal/retry"
 )
 
 // llmClient is a chat model that can also create embeddings. Ingestion and
@@ -50,21 +51,26 @@ func main() {
 	if err != nil {
 		fatal(log, "embedder", err)
 	}
+	policy := retry.Policy{MaxRetries: cfg.MaxRetries, BaseDelay: cfg.RetryBaseDelay, MaxDelay: cfg.RetryMaxDelay}
 
 	qd := qdrant.New(cfg.QdrantURL)
 	if err := qd.EnsureCollection(ctx, cfg.Collection, cfg.EmbeddingDim); err != nil {
 		fatal(log, "qdrant", err)
 	}
 
-	svc := rag.NewService(llm, embedder, qd, rag.Options{
-		Collection:   cfg.Collection,
-		ChunkSize:    cfg.ChunkSize,
-		ChunkOverlap: cfg.ChunkOverlap,
-		Workers:      cfg.Workers,
-		BatchSize:    cfg.BatchSize,
-		HistoryLen:   cfg.HistoryLen,
-		Logger:       log,
-	})
+	svc := rag.NewService(
+		retry.NewChatModel(llm, policy, log),
+		retry.NewEmbedder(embedder, policy, log),
+		qd,
+		rag.Options{
+			Collection:   cfg.Collection,
+			ChunkSize:    cfg.ChunkSize,
+			ChunkOverlap: cfg.ChunkOverlap,
+			Workers:      cfg.Workers,
+			BatchSize:    cfg.BatchSize,
+			HistoryLen:   cfg.HistoryLen,
+			Logger:       log,
+		})
 	handler := api.NewHandler(svc, api.Options{
 		MaxUploadBytes: cfg.MaxUploadBytes,
 		TopKDefault:    cfg.TopKDefault,
