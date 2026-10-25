@@ -55,16 +55,28 @@ type fakeChat struct {
 	rewriteErr   error
 }
 
-func (f *fakeChat) GenerateContent(_ context.Context, msgs []llms.MessageContent, _ ...llms.CallOption) (*llms.ContentResponse, error) {
+func (f *fakeChat) GenerateContent(ctx context.Context, msgs []llms.MessageContent, opts ...llms.CallOption) (*llms.ContentResponse, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.calls = append(f.calls, msgs)
-	reply := "answer"
+	reply := "the answer"
 	if isRewrite(msgs) {
 		if f.rewriteErr != nil {
 			return nil, f.rewriteErr
 		}
 		reply = f.rewriteReply
+	}
+	var o llms.CallOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	if o.StreamingFunc != nil { // stream the reply in two pieces
+		mid := len(reply) / 2
+		for _, part := range []string{reply[:mid], reply[mid:]} {
+			if err := o.StreamingFunc(ctx, []byte(part)); err != nil {
+				return nil, err
+			}
+		}
 	}
 	return &llms.ContentResponse{Choices: []*llms.ContentChoice{{Content: reply}}}, nil
 }

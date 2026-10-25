@@ -47,6 +47,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /documents", h.upload)
 	mux.HandleFunc("GET /documents/{id}", h.getDocument)
 	mux.HandleFunc("POST /documents/{id}/chat", h.chat)
+	mux.HandleFunc("POST /documents/{id}/chat/stream", h.chatStream)
 	return requestID(accessLog(h.log, mux))
 }
 
@@ -173,46 +174,13 @@ type chatResp struct {
 
 // POST /documents/{id}/chat
 func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
-	id, ok := docID(w, r)
+	req, ok := h.parseChat(w, r)
 	if !ok {
 		return
 	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxChatBodyBytes)
-	var req chatReq
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, http.StatusBadRequest, `body must be JSON like {"question": "..."}`)
-		return
-	}
-	req.Question = strings.TrimSpace(req.Question)
-	switch {
-	case req.Question == "":
-		writeErr(w, http.StatusBadRequest, `"question" is required`)
-		return
-	case utf8.RuneCountInString(req.Question) > maxQuestionRunes:
-		writeErr(w, http.StatusBadRequest, fmt.Sprintf(`"question" must be at most %d characters`, maxQuestionRunes))
-		return
-	case len(req.SessionID) > maxSessionIDBytes:
-		writeErr(w, http.StatusBadRequest, fmt.Sprintf(`"session_id" must be at most %d bytes`, maxSessionIDBytes))
-		return
-	}
-	if req.SessionID == "" {
-		req.SessionID = uuid.NewString()
-	}
-	req.TopK = h.topK(req.TopK)
-
-	ans, err := h.svc.Chat(r.Context(), rag.ChatRequest{
-		DocID: id, SessionID: req.SessionID, Question: req.Question, TopK: req.TopK,
-	})
-	switch {
-	case errors.Is(err, rag.ErrDocumentNotFound):
-		writeErr(w, http.StatusNotFound, "document not found")
-		return
-	case errors.Is(err, rag.ErrDocumentNotReady):
-		writeErr(w, http.StatusConflict, err.Error())
-		return
-	case err != nil:
-		h.log.ErrorContext(r.Context(), "chat failed", "doc_id", id, "err", err)
-		writeErr(w, http.StatusInternalServerError, "failed to answer the question")
+	ans, err := h.svc.Chat(r.Context(), req)
+	if err != nil {
+		h.chatError(w, r, req.DocID, err)
 		return
 	}
 	writeJSON(w, http.StatusOK, chatResp{
@@ -221,6 +189,52 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		Sources:        ans.Sources,
 		RewrittenQuery: ans.RewrittenQuery,
 	})
+}
+
+// parseChat validates the document ID and JSON body shared by both chat
+// endpoints, writing a 4xx response and returning false if they're invalid.
+func (h *Handler) parseChat(w http.ResponseWriter, r *http.Request) (rag.ChatRequest, bool) {
+	id, ok := docID(w, r)
+	if !ok {
+		return rag.ChatRequest{}, false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxChatBodyBytes)
+	var req chatReq
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, http.StatusBadRequest, `body must be JSON like {"question": "..."}`)
+		return rag.ChatRequest{}, false
+	}
+	req.Question = strings.TrimSpace(req.Question)
+	switch {
+	case req.Question == "":
+		writeErr(w, http.StatusBadRequest, `"question" is required`)
+		return rag.ChatRequest{}, false
+	case utf8.RuneCountInString(req.Question) > maxQuestionRunes:
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf(`"question" must be at most %d characters`, maxQuestionRunes))
+		return rag.ChatRequest{}, false
+	case len(req.SessionID) > maxSessionIDBytes:
+		writeErr(w, http.StatusBadRequest, fmt.Sprintf(`"session_id" must be at most %d bytes`, maxSessionIDBytes))
+		return rag.ChatRequest{}, false
+	}
+	if req.SessionID == "" {
+		req.SessionID = uuid.NewString()
+	}
+	return rag.ChatRequest{DocID: id, SessionID: req.SessionID, Question: req.Question, TopK: h.topK(req.TopK)}, true
+}
+
+// chatError maps a chat error to an HTTP response.
+func (h *Handler) chatError(w http.ResponseWriter, r *http.Request, id string, err error) {
+	switch {
+	case errors.Is(err, rag.ErrDocumentNotFound):
+		writeErr(w, http.StatusNotFound, "document not found")
+	case errors.Is(err, rag.ErrDocumentNotReady):
+		writeErr(w, http.StatusConflict, err.Error())
+	case r.Context().Err() != nil:
+		h.log.WarnContext(r.Context(), "chat cancelled", "doc_id", id, "err", err)
+	default:
+		h.log.ErrorContext(r.Context(), "chat failed", "doc_id", id, "err", err)
+		writeErr(w, http.StatusInternalServerError, "failed to answer the question")
+	}
 }
 
 // topK applies the default when top_k is omitted (0) and clamps it to [1, TopKMax].

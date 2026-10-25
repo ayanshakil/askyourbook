@@ -2,7 +2,10 @@ package retry
 
 import (
 	"context"
+	"errors"
 	"log/slog"
+	"slices"
+	"sync/atomic"
 	"time"
 
 	"github.com/tmc/langchaingo/llms"
@@ -47,7 +50,8 @@ type chatModel interface {
 }
 
 // ChatModel wraps a chat model so GenerateContent retries transient failures.
-// Don't use it for streaming calls: a retry would replay chunks already sent.
+// Streaming calls are retried only until the first chunk reaches the caller;
+// after that a retry would replay text the caller has already received.
 type ChatModel struct {
 	next   chatModel
 	policy Policy
@@ -59,11 +63,30 @@ func NewChatModel(next chatModel, p Policy, log *slog.Logger) *ChatModel {
 }
 
 func (m *ChatModel) GenerateContent(ctx context.Context, msgs []llms.MessageContent, opts ...llms.CallOption) (*llms.ContentResponse, error) {
+	var o llms.CallOptions
+	for _, opt := range opts {
+		opt(&o)
+	}
+	var streamed atomic.Bool
+	if next := o.StreamingFunc; next != nil {
+		opts = append(slices.Clip(opts), llms.WithStreamingFunc(func(ctx context.Context, chunk []byte) error {
+			streamed.Store(true)
+			return next(ctx, chunk)
+		}))
+	}
+
 	var out *llms.ContentResponse
 	err := Do(ctx, m.policy, logRetry(ctx, m.log, "generate content"), func() (err error) {
 		out, err = m.next.GenerateContent(ctx, msgs, opts...)
+		if err != nil && streamed.Load() {
+			return permanent{err}
+		}
 		return err
 	})
+	var p permanent
+	if errors.As(err, &p) {
+		err = p.error
+	}
 	return out, err
 }
 

@@ -112,3 +112,46 @@ func TestChatNothingAboveThresholdSkipsLLM(t *testing.T) {
 		t.Fatalf("history = %v; want the turn recorded", h)
 	}
 }
+
+func TestChatStreamDeliversChunksAndStoresTurn(t *testing.T) {
+	s, _, _, _ := newTestService(Options{})
+	var chunks []string
+	ans, err := s.ChatStream(context.Background(), ChatRequest{DocID: "doc", SessionID: "s1", Question: "q", TopK: 4},
+		func(text string) error { chunks = append(chunks, text); return nil })
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(chunks) != 2 || strings.Join(chunks, "") != ans.Text || ans.Text != "the answer" {
+		t.Fatalf("chunks=%q answer=%q", chunks, ans.Text)
+	}
+	if len(ans.Sources) != 2 {
+		t.Fatalf("sources = %+v", ans.Sources)
+	}
+	if h := s.sessions.Get("doc:s1"); len(h) != 2 || textOf(h[1]) != "the answer" {
+		t.Fatalf("history = %v", h)
+	}
+}
+
+func TestChatStreamAbortedByCallerIsNotStored(t *testing.T) {
+	s, _, _, _ := newTestService(Options{})
+	gone := errors.New("client went away")
+	_, err := s.ChatStream(context.Background(), ChatRequest{DocID: "doc", SessionID: "s1", Question: "q", TopK: 4},
+		func(string) error { return gone })
+	if !errors.Is(err, gone) {
+		t.Fatalf("err = %v", err)
+	}
+	if h := s.sessions.Get("doc:s1"); len(h) != 0 {
+		t.Fatalf("history = %v; an aborted turn must not be stored", h)
+	}
+}
+
+func TestChatStreamNotFoundIsStreamed(t *testing.T) {
+	s, _, chat, store := newTestService(Options{MinScore: 0.6})
+	store.scores = []float32{0.1, 0.1}
+	var got string
+	_, err := s.ChatStream(context.Background(), ChatRequest{DocID: "doc", SessionID: "s1", Question: "q", TopK: 4},
+		func(text string) error { got += text; return nil })
+	if err != nil || got != notFoundAnswer || len(chat.calls) != 0 {
+		t.Fatalf("err=%v streamed=%q calls=%d", err, got, len(chat.calls))
+	}
+}

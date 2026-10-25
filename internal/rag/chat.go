@@ -43,6 +43,18 @@ type Answer struct {
 // Chat retrieves the top-k chunks of the document most similar to the
 // question and asks the LLM to answer grounded in them and prior turns.
 func (s *Service) Chat(ctx context.Context, req ChatRequest) (Answer, error) {
+	return s.chat(ctx, req, nil)
+}
+
+// ChatStream is like Chat, but passes each piece of the answer to onText as
+// the LLM produces it. Errors returned before onText is first called happen
+// before any output (e.g. ErrDocumentNotFound). If onText returns an error,
+// generation stops and the turn is not stored.
+func (s *Service) ChatStream(ctx context.Context, req ChatRequest, onText func(string) error) (Answer, error) {
+	return s.chat(ctx, req, onText)
+}
+
+func (s *Service) chat(ctx context.Context, req ChatRequest, onText func(string) error) (Answer, error) {
 	start := time.Now()
 	if err := s.checkReady(ctx, req.DocID); err != nil {
 		return Answer{}, err
@@ -71,6 +83,11 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (Answer, error) {
 	if len(hits) == 0 {
 		// Nothing relevant: skip the LLM rather than let it answer from nothing.
 		ans.Text = notFoundAnswer
+		if onText != nil {
+			if err := onText(ans.Text); err != nil {
+				return Answer{}, err
+			}
+		}
 		s.remember(key, req.Question, ans.Text)
 		return ans, nil
 	}
@@ -82,7 +99,13 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (Answer, error) {
 	msgs = append(msgs, llms.TextParts(llms.ChatMessageTypeHuman,
 		fmt.Sprintf("Context:\n%s\nQuestion: %s", contextBlock, req.Question)))
 
-	resp, err := s.llm.GenerateContent(ctx, msgs, llms.WithTemperature(0.2))
+	opts := []llms.CallOption{llms.WithTemperature(0.2)}
+	if onText != nil {
+		opts = append(opts, llms.WithStreamingFunc(func(_ context.Context, chunk []byte) error {
+			return onText(string(chunk))
+		}))
+	}
+	resp, err := s.llm.GenerateContent(ctx, msgs, opts...)
 	if err != nil {
 		return Answer{}, fmt.Errorf("llm: %w", err)
 	}

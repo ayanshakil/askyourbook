@@ -58,10 +58,17 @@ func (p Policy) backoff(attempt int) time.Duration {
 // openai client ("API returned unexpected status code: 429: ...").
 var statusInMessage = regexp.MustCompile(`status code: (\d{3})`)
 
+// permanent marks an error that must not be retried whatever its cause.
+type permanent struct{ error }
+
+func (p permanent) Unwrap() error { return p.error }
+
 // Retryable reports whether err is worth retrying: rate limiting (429),
 // server errors (5xx) and network failures. Cancellation is never retried.
 func Retryable(err error) bool {
-	if err == nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+	var p permanent
+	if err == nil || errors.As(err, &p) ||
+		errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 		return false
 	}
 	if code, ok := StatusCode(err); ok {
