@@ -1,10 +1,11 @@
-.PHONY: up down run build test lint sample
+.PHONY: up down run build test lint sample stack stack-logs
 
 # Load .env (API keys, LLM_PROVIDER, ...) into the environment of recipes that need it.
 ENV = set -a; [ -f .env ] && . ./.env; set +a;
 
+# Dependencies only (Qdrant, Redis); run the API on the host with `make run`.
 up:
-	docker compose up -d
+	docker compose up -d qdrant redis
 
 down:
 	docker compose down
@@ -24,3 +25,10 @@ lint:
 
 sample:
 	python3 testdata/gen_sample_pdf.py
+
+# Everything in containers: API + Qdrant + Redis.
+stack:
+	docker compose up -d --build
+
+stack-logs:
+	docker compose logs -f api
