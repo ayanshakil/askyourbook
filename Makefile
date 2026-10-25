@@ -1,4 +1,4 @@
-.PHONY: up down run build test lint sample stack stack-logs
+.PHONY: up down run build test test-integration lint sample stack stack-logs
 
 # Load .env (API keys, LLM_PROVIDER, ...) into the environment of recipes that need it.
 ENV = set -a; [ -f .env ] && . ./.env; set +a;
@@ -18,6 +18,11 @@ build:
 
 test:
 	go test -race ./...
+
+# Needs Qdrant (and optionally Redis) from `make up`; no API key required.
+# Set TEST_REDIS_URL=redis://localhost:6379/15 to include Redis.
+test-integration:
+	go test -tags integration -race -count=1 ./internal/integration ./internal/session
 
 lint:
 	@test -z "$$(gofmt -l .)" || (echo "gofmt needed:"; gofmt -l .; exit 1)
