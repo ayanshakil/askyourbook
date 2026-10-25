@@ -26,6 +26,8 @@ type Config struct {
 	ChunkOverlap int // CHUNK_OVERLAP, in characters
 	Workers      int // EMBED_WORKERS: max concurrent embedding batches
 	BatchSize    int // EMBED_BATCH_SIZE: chunks per embedding call
+	IngestJobs   int // INGEST_WORKERS: documents indexed concurrently in the background
+	IngestQueue  int // INGEST_QUEUE: documents that can wait for a worker
 
 	TopKDefault    int     // TOP_K_DEFAULT
 	TopKMax        int     // TOP_K_MAX
@@ -81,6 +83,8 @@ func load(getenv func(string) string) (Config, error) {
 	c.ChunkOverlap = e.int("CHUNK_OVERLAP", 150)
 	c.Workers = e.int("EMBED_WORKERS", 4)
 	c.BatchSize = e.int("EMBED_BATCH_SIZE", 32)
+	c.IngestJobs = e.int("INGEST_WORKERS", 2)
+	c.IngestQueue = e.int("INGEST_QUEUE", 16)
 
 	c.TopKDefault = e.int("TOP_K_DEFAULT", 4)
 	c.TopKMax = e.int("TOP_K_MAX", 20)
@@ -112,6 +116,8 @@ func (c Config) validate() error {
 	check(c.ChunkOverlap >= 0 && c.ChunkOverlap < c.ChunkSize, "CHUNK_OVERLAP must be in [0, CHUNK_SIZE)")
 	check(c.Workers > 0, "EMBED_WORKERS must be positive")
 	check(c.BatchSize > 0, "EMBED_BATCH_SIZE must be positive")
+	check(c.IngestJobs > 0, "INGEST_WORKERS must be positive")
+	check(c.IngestQueue >= 0, "INGEST_QUEUE must not be negative")
 	check(c.TopKMax > 0, "TOP_K_MAX must be positive")
 	check(c.TopKDefault > 0 && c.TopKDefault <= c.TopKMax, "TOP_K_DEFAULT must be in [1, TOP_K_MAX]")
 	check(c.ScoreThreshold >= 0 && c.ScoreThreshold <= 1, "SCORE_THRESHOLD must be in [0, 1]")

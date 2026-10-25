@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"context"
 	"log/slog"
 	"sync"
 
@@ -13,8 +14,10 @@ type Options struct {
 	Collection   string
 	ChunkSize    int     // characters per chunk
 	ChunkOverlap int     // characters shared by neighbouring chunks
-	Workers      int     // max concurrent embedding goroutines
+	Workers      int     // max concurrent embedding calls, across all documents
 	BatchSize    int     // chunks per embedding request
+	IngestJobs   int     // documents indexed concurrently by background workers
+	QueueSize    int     // documents that can wait for a worker
 	HistoryLen   int     // messages kept per chat session
 	Rewrite      bool    // rewrite follow-up questions into standalone queries
 	MinScore     float64 // drop hits below this cosine similarity; 0 disables
@@ -27,20 +30,32 @@ type Service struct {
 	qd         VectorStore
 	collection string
 	splitter   textsplitter.TextSplitter
-	workers    int
 	batchSize  int
+	embedSem   chan struct{} // bounds concurrent embedding calls
 	sessions   *SessionStore
 	rewrite    bool
 	minScore   float64
 	log        *slog.Logger
+
+	// Background ingestion.
+	tracker    *tracker
+	jobs       chan job
+	workersWG  sync.WaitGroup
+	closeMu    sync.RWMutex
+	closed     bool
+	baseCtx    context.Context // cancelled to abort running ingests
+	cancelBase context.CancelFunc
 }
 
+// NewService returns a Service and starts its background ingestion workers;
+// call Shutdown to stop them.
 func NewService(llm ChatModel, e Embedder, qd VectorStore, opts Options) *Service {
 	log := opts.Logger
 	if log == nil {
 		log = slog.Default()
 	}
-	return &Service{
+	baseCtx, cancel := context.WithCancel(context.Background())
+	s := &Service{
 		llm:        llm,
 		embedder:   e,
 		qd:         qd,
@@ -49,13 +64,19 @@ func NewService(llm ChatModel, e Embedder, qd VectorStore, opts Options) *Servic
 			textsplitter.WithChunkSize(opts.ChunkSize),
 			textsplitter.WithChunkOverlap(opts.ChunkOverlap),
 		),
-		workers:   opts.Workers,
-		batchSize: opts.BatchSize,
-		sessions:  NewSessionStore(opts.HistoryLen),
-		rewrite:   opts.Rewrite,
-		minScore:  opts.MinScore,
-		log:       log,
+		batchSize:  opts.BatchSize,
+		embedSem:   make(chan struct{}, opts.Workers),
+		sessions:   NewSessionStore(opts.HistoryLen),
+		rewrite:    opts.Rewrite,
+		minScore:   opts.MinScore,
+		log:        log,
+		tracker:    &tracker{docs: map[string]Document{}},
+		jobs:       make(chan job, opts.QueueSize),
+		baseCtx:    baseCtx,
+		cancelBase: cancel,
 	}
+	s.startWorkers(opts.IngestJobs)
+	return s
 }
 
 // SessionStore keeps per-session chat history in memory (swap for Redis later).

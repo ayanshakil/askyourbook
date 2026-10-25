@@ -85,22 +85,32 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// multipart.File implements io.ReaderAt, which the PDF loader needs.
-	docID, n, err := h.svc.Ingest(r.Context(), file, header.Size, header.Filename)
+	doc, err := h.svc.Ingest(r.Context(), file, header.Size, header.Filename)
 	switch {
 	case errors.Is(err, rag.ErrInvalidPDF), errors.Is(err, rag.ErrNoText):
 		h.log.WarnContext(r.Context(), "rejected upload", "filename", header.Filename, "err", err)
 		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 		return
+	case errors.Is(err, rag.ErrQueueFull), errors.Is(err, rag.ErrShuttingDown):
+		w.Header().Set("Retry-After", "10")
+		writeErr(w, http.StatusServiceUnavailable, err.Error()+"; try again shortly")
+		return
 	case r.Context().Err() != nil:
 		// The client went away; there's no one to respond to.
-		h.log.WarnContext(r.Context(), "ingest cancelled", "filename", header.Filename, "err", err)
+		h.log.WarnContext(r.Context(), "upload cancelled", "filename", header.Filename, "err", err)
 		return
 	case err != nil:
-		h.log.ErrorContext(r.Context(), "ingest failed", "filename", header.Filename, "err", err)
+		h.log.ErrorContext(r.Context(), "upload failed", "filename", header.Filename, "err", err)
 		writeErr(w, http.StatusInternalServerError, "failed to process the document")
 		return
 	}
-	writeJSON(w, http.StatusCreated, map[string]any{"document_id": docID, "chunks": n, "filename": header.Filename})
+	w.Header().Set("Location", "/documents/"+doc.ID)
+	writeJSON(w, http.StatusAccepted, map[string]any{
+		"document_id": doc.ID,
+		"status":      doc.Status,
+		"filename":    doc.Filename,
+		"chunks":      doc.Chunks,
+	})
 }
 
 // checkPDF validates the upload's name, size and magic bytes. It returns a
@@ -196,6 +206,9 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case errors.Is(err, rag.ErrDocumentNotFound):
 		writeErr(w, http.StatusNotFound, "document not found")
+		return
+	case errors.Is(err, rag.ErrDocumentNotReady):
+		writeErr(w, http.StatusConflict, err.Error())
 		return
 	case err != nil:
 		h.log.ErrorContext(r.Context(), "chat failed", "doc_id", id, "err", err)

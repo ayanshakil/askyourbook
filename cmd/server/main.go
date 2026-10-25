@@ -68,6 +68,8 @@ func main() {
 			ChunkOverlap: cfg.ChunkOverlap,
 			Workers:      cfg.Workers,
 			BatchSize:    cfg.BatchSize,
+			IngestJobs:   cfg.IngestJobs,
+			QueueSize:    cfg.IngestQueue,
 			HistoryLen:   cfg.HistoryLen,
 			Rewrite:      cfg.RewriteQueries,
 			MinScore:     cfg.ScoreThreshold,
@@ -99,10 +101,18 @@ func main() {
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
 	<-stop
-	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	log.Info("shutting down")
+	httpCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if err := srv.Shutdown(shutdownCtx); err != nil {
-		log.Error("shutdown", "err", err)
+	if err := srv.Shutdown(httpCtx); err != nil {
+		log.Error("http shutdown", "err", err)
+	}
+	// Let queued and running ingests finish; after the timeout they are
+	// cancelled and their partial chunks removed.
+	ingestCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	if err := svc.Shutdown(ingestCtx); err != nil {
+		log.Error("ingest shutdown", "err", err)
 	}
 	log.Info("server stopped")
 }

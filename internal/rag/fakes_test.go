@@ -12,12 +12,26 @@ import (
 )
 
 // fakeEmbedder records the texts it embeds and returns a fixed vector.
+// EmbedDocuments fails with docErr if set, and waits for release (if set)
+// or cancellation first.
 type fakeEmbedder struct {
 	mu      sync.Mutex
 	queries []string
+	docErr  error
+	release chan struct{}
 }
 
-func (f *fakeEmbedder) EmbedDocuments(_ context.Context, texts []string) ([][]float32, error) {
+func (f *fakeEmbedder) EmbedDocuments(ctx context.Context, texts []string) ([][]float32, error) {
+	if f.release != nil {
+		select {
+		case <-f.release:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if f.docErr != nil {
+		return nil, f.docErr
+	}
 	out := make([][]float32, len(texts))
 	for i := range out {
 		out[i] = []float32{1, 0}
@@ -152,6 +166,9 @@ func newTestService(opts Options) (*Service, *fakeEmbedder, *fakeChat, *fakeStor
 	}
 	if opts.ChunkSize == 0 {
 		opts.ChunkSize, opts.ChunkOverlap, opts.Workers, opts.BatchSize = 1000, 100, 2, 2
+	}
+	if opts.IngestJobs == 0 {
+		opts.IngestJobs, opts.QueueSize = 1, 4
 	}
 	opts.Logger = slog.New(slog.DiscardHandler)
 	return NewService(chat, emb, store, opts), emb, chat, store

@@ -16,65 +16,90 @@ import (
 	"github.com/ayanshakil/askyourbook/internal/qdrant"
 )
 
-// Ingest loads a PDF, splits it into chunks, embeds the chunks concurrently,
-// and upserts them into Qdrant. It returns the new document ID.
-func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filename string) (string, int, error) {
-	start := time.Now()
+// Ingest parses and chunks a PDF, then queues the chunks to be embedded and
+// indexed by a background worker. Parsing happens here, in the caller's
+// request, so unreadable or text-less PDFs are rejected immediately; the
+// slow, network-bound part runs asynchronously. The returned document has
+// status "processing"; Document reports when it is ready or failed.
+func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filename string) (Document, error) {
 	pages, err := documentloaders.NewPDF(r, size).Load(ctx) // one Document per page
 	if err != nil {
-		return "", 0, fmt.Errorf("%w: %v", ErrInvalidPDF, err)
+		return Document{}, fmt.Errorf("%w: %v", ErrInvalidPDF, err)
 	}
 	chunks, err := textsplitter.SplitDocuments(s.splitter, pages) // keeps page metadata
 	if err != nil {
-		return "", 0, fmt.Errorf("split: %w", err)
+		return Document{}, fmt.Errorf("split: %w", err)
 	}
 	chunks = nonEmpty(chunks)
 	if len(chunks) == 0 {
-		return "", 0, ErrNoText
+		return Document{}, ErrNoText
 	}
 
-	docID := uuid.NewString()
-	createdAt := time.Now().UTC().Format(time.RFC3339)
+	doc := Document{
+		ID:        uuid.NewString(),
+		Filename:  filename,
+		Chunks:    len(chunks),
+		CreatedAt: time.Now().UTC().Truncate(time.Second),
+		Status:    StatusProcessing,
+	}
+	// The job outlives the request, so it keeps the request's values (for
+	// the request ID in logs) but not its cancellation.
+	if err := s.enqueue(job{ctx: context.WithoutCancel(ctx), doc: doc, chunks: chunks}); err != nil {
+		return Document{}, err
+	}
+	s.log.InfoContext(ctx, "ingest queued", "doc_id", doc.ID, "filename", filename,
+		"pages", len(pages), "chunks", len(chunks))
+	return doc, nil
+}
+
+// index embeds the chunks concurrently and upserts them into Qdrant. Each
+// batch runs in its own goroutine; the service-wide semaphore caps how many
+// embedding calls are in flight across all documents, and the first error
+// cancels the remaining batches. On failure, stored chunks are deleted.
+func (s *Service) index(ctx context.Context, doc Document, chunks []schema.Document) error {
+	start := time.Now()
 	batches := (len(chunks) + s.batchSize - 1) / s.batchSize
-	s.log.InfoContext(ctx, "ingest started", "doc_id", docID, "filename", filename,
-		"pages", len(pages), "chunks", len(chunks), "batches", batches, "workers", s.workers)
+	s.log.InfoContext(ctx, "ingest started", "doc_id", doc.ID, "chunks", len(chunks),
+		"batches", batches, "max_concurrent", cap(s.embedSem))
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	var (
 		wg       sync.WaitGroup
-		sem      = make(chan struct{}, s.workers) // bounds concurrency
 		errOnce  sync.Once
 		firstErr error
 	)
-
+	createdAt := doc.CreatedAt.Format(time.RFC3339)
 	for i := 0; i < len(chunks); i += s.batchSize {
 		batch := chunks[i:min(i+s.batchSize, len(chunks))]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			select {
-			case sem <- struct{}{}:
+			case s.embedSem <- struct{}{}:
 			case <-ctx.Done():
 				return
 			}
-			defer func() { <-sem }()
+			defer func() { <-s.embedSem }()
 
-			if err := s.embedAndStore(ctx, docID, filename, createdAt, batch); err != nil {
+			if err := s.embedAndStore(ctx, doc.ID, doc.Filename, createdAt, batch); err != nil {
 				errOnce.Do(func() { firstErr = err; cancel() }) // fail fast
 			}
 		}()
 	}
 	wg.Wait()
 
-	if firstErr != nil {
-		s.cleanup(ctx, docID)
-		return "", 0, firstErr
+	if firstErr == nil && ctx.Err() != nil {
+		firstErr = ctx.Err() // cancelled before any batch failed (e.g. shutdown)
 	}
-	s.log.InfoContext(ctx, "ingest finished", "doc_id", docID, "chunks", len(chunks),
+	if firstErr != nil {
+		s.cleanup(ctx, doc.ID)
+		return firstErr
+	}
+	s.log.InfoContext(ctx, "ingest finished", "doc_id", doc.ID, "chunks", len(chunks),
 		"duration_ms", time.Since(start).Milliseconds())
-	return docID, len(chunks), nil
+	return nil
 }
 
 // cleanup deletes the chunks of a failed ingest so the document never

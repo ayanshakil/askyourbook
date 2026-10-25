@@ -44,10 +44,8 @@ type Answer struct {
 // question and asks the LLM to answer grounded in them and prior turns.
 func (s *Service) Chat(ctx context.Context, req ChatRequest) (Answer, error) {
 	start := time.Now()
-	if ok, err := s.exists(ctx, req.DocID); err != nil {
+	if err := s.checkReady(ctx, req.DocID); err != nil {
 		return Answer{}, err
-	} else if !ok {
-		return Answer{}, ErrDocumentNotFound
 	}
 
 	key := req.DocID + ":" + req.SessionID
