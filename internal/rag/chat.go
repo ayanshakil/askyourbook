@@ -22,24 +22,79 @@ type Source struct {
 	Snippet string  `json:"snippet"`
 }
 
-// Chat embeds the question, retrieves the top-k chunks for this document,
-// and asks the LLM to answer grounded in those chunks plus prior turns.
-func (s *Service) Chat(ctx context.Context, docID, sessionID, question string, k int) (string, []Source, error) {
+type ChatRequest struct {
+	DocID     string
+	SessionID string
+	Question  string
+	TopK      int
+}
+
+type Answer struct {
+	Text    string
+	Sources []Source
+	// RewrittenQuery is the standalone query used for retrieval when a
+	// follow-up question was rewritten; empty otherwise.
+	RewrittenQuery string
+}
+
+// Chat retrieves the top-k chunks of the document most similar to the
+// question and asks the LLM to answer grounded in them and prior turns.
+func (s *Service) Chat(ctx context.Context, req ChatRequest) (Answer, error) {
 	start := time.Now()
-	if ok, err := s.exists(ctx, docID); err != nil {
-		return "", nil, err
+	if ok, err := s.exists(ctx, req.DocID); err != nil {
+		return Answer{}, err
 	} else if !ok {
-		return "", nil, ErrDocumentNotFound
-	}
-	qvec, err := s.embedder.EmbedQuery(ctx, question) // same model as ingestion
-	if err != nil {
-		return "", nil, fmt.Errorf("embed query: %w", err)
-	}
-	hits, err := s.qd.Search(ctx, s.collection, qvec, k, docFilter(docID))
-	if err != nil {
-		return "", nil, fmt.Errorf("search: %w", err)
+		return Answer{}, ErrDocumentNotFound
 	}
 
+	key := req.DocID + ":" + req.SessionID
+	history := s.sessions.Get(key)
+
+	// Follow-ups like "what about the second one?" retrieve poorly on their
+	// own, so they're rewritten into a standalone query before embedding.
+	query := s.searchQuery(ctx, history, req.Question)
+	qvec, err := s.embedder.EmbedQuery(ctx, query) // same model as ingestion
+	if err != nil {
+		return Answer{}, fmt.Errorf("embed query: %w", err)
+	}
+	hits, err := s.qd.Search(ctx, s.collection, qvec, req.TopK, docFilter(req.DocID))
+	if err != nil {
+		return Answer{}, fmt.Errorf("search: %w", err)
+	}
+	contextBlock, sources := buildContext(hits)
+
+	msgs := []llms.MessageContent{llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt)}
+	msgs = append(msgs, history...) // multi-turn memory
+	msgs = append(msgs, llms.TextParts(llms.ChatMessageTypeHuman,
+		fmt.Sprintf("Context:\n%s\nQuestion: %s", contextBlock, req.Question)))
+
+	resp, err := s.llm.GenerateContent(ctx, msgs, llms.WithTemperature(0.2))
+	if err != nil {
+		return Answer{}, fmt.Errorf("llm: %w", err)
+	}
+	if len(resp.Choices) == 0 {
+		return Answer{}, errors.New("llm returned no choices")
+	}
+	text := resp.Choices[0].Content
+	s.logChat(ctx, req.DocID, hits, resp.Choices[0].GenerationInfo, start)
+
+	// Store the user's original question (not the rewrite or the retrieved
+	// context) to keep history small and faithful to the conversation.
+	s.sessions.Append(key,
+		llms.TextParts(llms.ChatMessageTypeHuman, req.Question),
+		llms.TextParts(llms.ChatMessageTypeAI, text),
+	)
+
+	ans := Answer{Text: text, Sources: sources}
+	if query != req.Question {
+		ans.RewrittenQuery = query
+	}
+	return ans, nil
+}
+
+// buildContext formats the hits as page-labelled context for the prompt and
+// as sources for the response.
+func buildContext(hits []qdrant.SearchResult) (string, []Source) {
 	var sb strings.Builder
 	sources := make([]Source, 0, len(hits))
 	for _, h := range hits {
@@ -48,29 +103,7 @@ func (s *Service) Chat(ctx context.Context, docID, sessionID, question string, k
 		fmt.Fprintf(&sb, "[Page %d]\n%s\n\n", page, text)
 		sources = append(sources, Source{Page: page, Score: h.Score, Snippet: truncate(text, 200)})
 	}
-
-	key := docID + ":" + sessionID
-	msgs := []llms.MessageContent{llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt)}
-	msgs = append(msgs, s.sessions.Get(key)...) // multi-turn memory
-	msgs = append(msgs, llms.TextParts(llms.ChatMessageTypeHuman,
-		fmt.Sprintf("Context:\n%s\nQuestion: %s", sb.String(), question)))
-
-	resp, err := s.llm.GenerateContent(ctx, msgs, llms.WithTemperature(0.2))
-	if err != nil {
-		return "", nil, fmt.Errorf("llm: %w", err)
-	}
-	if len(resp.Choices) == 0 {
-		return "", nil, errors.New("llm returned no choices")
-	}
-	answer := resp.Choices[0].Content
-	s.logChat(ctx, docID, hits, resp.Choices[0].GenerationInfo, start)
-
-	// Store the bare question (not the retrieved context) to keep history small.
-	s.sessions.Append(key,
-		llms.TextParts(llms.ChatMessageTypeHuman, question),
-		llms.TextParts(llms.ChatMessageTypeAI, answer),
-	)
-	return answer, sources, nil
+	return sb.String(), sources
 }
 
 // pageOf reads the 1-based page number from a payload. JSON numbers decode

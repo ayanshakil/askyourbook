@@ -69,6 +69,7 @@ func main() {
 			Workers:      cfg.Workers,
 			BatchSize:    cfg.BatchSize,
 			HistoryLen:   cfg.HistoryLen,
+			Rewrite:      cfg.RewriteQueries,
 			Logger:       log,
 		})
 	handler := api.NewHandler(svc, api.Options{

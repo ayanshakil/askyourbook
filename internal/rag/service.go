@@ -11,11 +11,12 @@ import (
 // Options are the Service tunables; see the config package for defaults.
 type Options struct {
 	Collection   string
-	ChunkSize    int // characters per chunk
-	ChunkOverlap int // characters shared by neighbouring chunks
-	Workers      int // max concurrent embedding goroutines
-	BatchSize    int // chunks per embedding request
-	HistoryLen   int // messages kept per chat session
+	ChunkSize    int  // characters per chunk
+	ChunkOverlap int  // characters shared by neighbouring chunks
+	Workers      int  // max concurrent embedding goroutines
+	BatchSize    int  // chunks per embedding request
+	HistoryLen   int  // messages kept per chat session
+	Rewrite      bool // rewrite follow-up questions into standalone queries
 	Logger       *slog.Logger
 }
 
@@ -28,6 +29,7 @@ type Service struct {
 	workers    int
 	batchSize  int
 	sessions   *SessionStore
+	rewrite    bool
 	log        *slog.Logger
 }
 
@@ -48,6 +50,7 @@ func NewService(llm ChatModel, e Embedder, qd VectorStore, opts Options) *Servic
 		workers:   opts.Workers,
 		batchSize: opts.BatchSize,
 		sessions:  NewSessionStore(opts.HistoryLen),
+		rewrite:   opts.Rewrite,
 		log:       log,
 	}
 }

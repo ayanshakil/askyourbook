@@ -154,6 +154,13 @@ type chatReq struct {
 	TopK      int    `json:"top_k"`
 }
 
+type chatResp struct {
+	SessionID      string       `json:"session_id"`
+	Answer         string       `json:"answer"`
+	Sources        []rag.Source `json:"sources"`
+	RewrittenQuery string       `json:"rewritten_query,omitempty"`
+}
+
 // POST /documents/{id}/chat
 func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	id, ok := docID(w, r)
@@ -183,7 +190,9 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	req.TopK = h.topK(req.TopK)
 
-	answer, sources, err := h.svc.Chat(r.Context(), id, req.SessionID, req.Question, req.TopK)
+	ans, err := h.svc.Chat(r.Context(), rag.ChatRequest{
+		DocID: id, SessionID: req.SessionID, Question: req.Question, TopK: req.TopK,
+	})
 	switch {
 	case errors.Is(err, rag.ErrDocumentNotFound):
 		writeErr(w, http.StatusNotFound, "document not found")
@@ -193,10 +202,11 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "failed to answer the question")
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{
-		"session_id": req.SessionID,
-		"answer":     answer,
-		"sources":    sources,
+	writeJSON(w, http.StatusOK, chatResp{
+		SessionID:      req.SessionID,
+		Answer:         ans.Text,
+		Sources:        ans.Sources,
+		RewrittenQuery: ans.RewrittenQuery,
 	})
 }
 
