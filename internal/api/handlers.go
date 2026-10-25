@@ -8,7 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
-	"github.com/yourname/askyourbook/internal/rag"
+	"github.com/ayanshakil/askyourbook/internal/rag"
 )
 
 type Handler struct{ svc *rag.Service }

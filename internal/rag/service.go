@@ -7,7 +7,7 @@ import (
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/textsplitter"
 
-	"github.com/yourname/askyourbook/internal/qdrant"
+	"github.com/ayanshakil/askyourbook/internal/qdrant"
 )
 
 type Service struct {

@@ -13,7 +13,7 @@ import (
 	"github.com/tmc/langchaingo/schema"
 	"github.com/tmc/langchaingo/textsplitter"
 
-	"github.com/yourname/askyourbook/internal/qdrant"
+	"github.com/ayanshakil/askyourbook/internal/qdrant"
 )
 
 // Ingest loads a PDF, splits it into chunks, embeds the chunks concurrently,

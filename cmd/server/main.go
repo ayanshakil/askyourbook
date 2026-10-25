@@ -12,9 +12,9 @@ import (
 	"github.com/tmc/langchaingo/embeddings"
 	"github.com/tmc/langchaingo/llms/openai"
 
-	"github.com/yourname/askyourbook/internal/api"
-	"github.com/yourname/askyourbook/internal/qdrant"
-	"github.com/yourname/askyourbook/internal/rag"
+	"github.com/ayanshakil/askyourbook/internal/api"
+	"github.com/ayanshakil/askyourbook/internal/qdrant"
+	"github.com/ayanshakil/askyourbook/internal/rag"
 )
 
 const (
