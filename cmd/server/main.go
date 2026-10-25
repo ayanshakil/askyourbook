@@ -16,6 +16,7 @@ import (
 	"github.com/tmc/langchaingo/llms/openai"
 
 	"github.com/ayanshakil/askyourbook/internal/api"
+	"github.com/ayanshakil/askyourbook/internal/config"
 	"github.com/ayanshakil/askyourbook/internal/qdrant"
 	"github.com/ayanshakil/askyourbook/internal/rag"
 )
@@ -30,8 +31,12 @@ type llmClient interface {
 func main() {
 	ctx := context.Background()
 
-	provider := getenv("LLM_PROVIDER", "gemini")
-	llm, dim, err := newLLM(ctx, provider)
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
+	llm, err := newLLM(ctx, cfg)
 	if err != nil {
 		log.Fatalf("llm: %v", err)
 	}
@@ -40,25 +45,35 @@ func main() {
 		log.Fatalf("embedder: %v", err)
 	}
 
-	// One collection per provider: their embedding spaces aren't comparable.
-	collection := "askyourbook_" + provider
-	qd := qdrant.New(getenv("QDRANT_URL", "http://localhost:6333"))
-	if err := qd.EnsureCollection(ctx, collection, dim); err != nil {
+	qd := qdrant.New(cfg.QdrantURL)
+	if err := qd.EnsureCollection(ctx, cfg.Collection, cfg.EmbeddingDim); err != nil {
 		log.Fatalf("qdrant: %v", err)
 	}
 
-	svc := rag.NewService(llm, embedder, qd, collection)
-	handler := api.NewHandler(svc)
+	svc := rag.NewService(llm, embedder, qd, rag.Options{
+		Collection:   cfg.Collection,
+		ChunkSize:    cfg.ChunkSize,
+		ChunkOverlap: cfg.ChunkOverlap,
+		Workers:      cfg.Workers,
+		BatchSize:    cfg.BatchSize,
+		HistoryLen:   cfg.HistoryLen,
+	})
+	handler := api.NewHandler(svc, api.Options{
+		MaxUploadBytes: cfg.MaxUploadBytes,
+		TopKDefault:    cfg.TopKDefault,
+		TopKMax:        cfg.TopKMax,
+	})
 
 	srv := &http.Server{
-		Addr:         ":" + getenv("PORT", "8080"),
+		Addr:         ":" + cfg.Port,
 		Handler:      handler.Routes(),
 		ReadTimeout:  60 * time.Second,
 		WriteTimeout: 120 * time.Second,
 	}
 
 	go func() {
-		log.Printf("AskYourBook listening on %s (provider %s, collection %s)", srv.Addr, provider, collection)
+		log.Printf("AskYourBook listening on %s (provider %s, chat %s, embeddings %s, collection %s)",
+			srv.Addr, cfg.Provider, cfg.ChatModel, cfg.EmbeddingModel, cfg.Collection)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			log.Fatal(err)
 		}
@@ -74,31 +89,21 @@ func main() {
 	log.Println("server stopped")
 }
 
-// newLLM returns the client for the named provider and its embedding dimension.
-func newLLM(ctx context.Context, provider string) (llmClient, int, error) {
-	switch provider {
+// newLLM returns the client for the configured provider. API keys are read
+// from the environment (GOOGLE_API_KEY or OPENAI_API_KEY).
+func newLLM(ctx context.Context, cfg config.Config) (llmClient, error) {
+	switch cfg.Provider {
 	case "gemini":
-		// Reads GOOGLE_API_KEY from the environment.
-		llm, err := googleai.New(ctx,
-			googleai.WithDefaultModel("gemini-2.5-flash"),
-			googleai.WithDefaultEmbeddingModel("gemini-embedding-001"),
+		return googleai.New(ctx,
+			googleai.WithDefaultModel(cfg.ChatModel),
+			googleai.WithDefaultEmbeddingModel(cfg.EmbeddingModel),
 		)
-		return llm, 3072, err
 	case "openai":
-		// Reads OPENAI_API_KEY from the environment.
-		llm, err := openai.New(
-			openai.WithModel("gpt-4o-mini"),
-			openai.WithEmbeddingModel("text-embedding-3-small"),
+		return openai.New(
+			openai.WithModel(cfg.ChatModel),
+			openai.WithEmbeddingModel(cfg.EmbeddingModel),
 		)
-		return llm, 1536, err
 	default:
-		return nil, 0, fmt.Errorf("unknown LLM_PROVIDER %q (want gemini or openai)", provider)
+		return nil, fmt.Errorf("unknown provider %q", cfg.Provider)
 	}
-}
-
-func getenv(k, def string) string {
-	if v := os.Getenv(k); v != "" {
-		return v
-	}
-	return def
 }

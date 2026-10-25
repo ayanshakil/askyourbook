@@ -11,9 +11,19 @@ import (
 	"github.com/ayanshakil/askyourbook/internal/rag"
 )
 
-type Handler struct{ svc *rag.Service }
+// Options are the HTTP-layer limits; see the config package for defaults.
+type Options struct {
+	MaxUploadBytes int64
+	TopKDefault    int
+	TopKMax        int
+}
 
-func NewHandler(svc *rag.Service) *Handler { return &Handler{svc: svc} }
+type Handler struct {
+	svc  *rag.Service
+	opts Options
+}
+
+func NewHandler(svc *rag.Service, opts Options) *Handler { return &Handler{svc: svc, opts: opts} }
 
 // Routes uses Go 1.22 method+path patterns.
 func (h *Handler) Routes() http.Handler {
@@ -28,7 +38,7 @@ func (h *Handler) Routes() http.Handler {
 
 // POST /documents  (multipart form, field "file")
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 50<<20) // 50 MB cap
+	r.Body = http.MaxBytesReader(w, r.Body, h.opts.MaxUploadBytes)
 	if err := r.ParseMultipartForm(32 << 20); err != nil {
 		writeErr(w, http.StatusBadRequest, "invalid multipart form")
 		return
@@ -69,8 +79,8 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	if req.SessionID == "" {
 		req.SessionID = uuid.NewString()
 	}
-	if req.TopK <= 0 || req.TopK > 20 {
-		req.TopK = 4
+	if req.TopK <= 0 || req.TopK > h.opts.TopKMax {
+		req.TopK = h.opts.TopKDefault
 	}
 
 	answer, sources, err := h.svc.Chat(r.Context(), r.PathValue("id"), req.SessionID, req.Question, req.TopK)
