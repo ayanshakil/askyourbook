@@ -2,7 +2,6 @@ package rag
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -23,7 +22,7 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 	start := time.Now()
 	pages, err := documentloaders.NewPDF(r, size).Load(ctx) // one Document per page
 	if err != nil {
-		return "", 0, fmt.Errorf("load pdf: %w", err)
+		return "", 0, fmt.Errorf("%w: %v", ErrInvalidPDF, err)
 	}
 	chunks, err := textsplitter.SplitDocuments(s.splitter, pages) // keeps page metadata
 	if err != nil {
@@ -31,7 +30,7 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 	}
 	chunks = nonEmpty(chunks)
 	if len(chunks) == 0 {
-		return "", 0, errors.New("no extractable text (scanned PDF? needs OCR)")
+		return "", 0, ErrNoText
 	}
 
 	docID := uuid.NewString()
@@ -49,8 +48,8 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 		firstErr error
 	)
 
-	for start := 0; start < len(chunks); start += s.batchSize {
-		batch := chunks[start:min(start+s.batchSize, len(chunks))]
+	for i := 0; i < len(chunks); i += s.batchSize {
+		batch := chunks[i:min(i+s.batchSize, len(chunks))]
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -85,6 +84,9 @@ func (s *Service) embedAndStore(ctx context.Context, docID, filename string, bat
 	if err != nil {
 		return fmt.Errorf("embed: %w", err)
 	}
+	if len(vecs) != len(batch) {
+		return fmt.Errorf("embed: got %d vectors for %d chunks", len(vecs), len(batch))
+	}
 
 	points := make([]qdrant.Point, len(batch))
 	for i, d := range batch {
@@ -99,7 +101,10 @@ func (s *Service) embedAndStore(ctx context.Context, docID, filename string, bat
 			},
 		}
 	}
-	return s.qd.Upsert(ctx, s.collection, points)
+	if err := s.qd.Upsert(ctx, s.collection, points); err != nil {
+		return fmt.Errorf("upsert: %w", err)
+	}
+	return nil
 }
 
 func nonEmpty(docs []schema.Document) []schema.Document {

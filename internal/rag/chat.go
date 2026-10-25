@@ -97,9 +97,14 @@ func (s *Service) logChat(ctx context.Context, docID string, hits []qdrant.Searc
 	s.log.InfoContext(ctx, "chat answered", attrs...)
 }
 
+// truncate shortens s to at most n runes, never splitting a UTF-8 character.
 func truncate(s string, n int) string {
-	if len(s) <= n {
-		return s
+	runes := 0
+	for i := range s {
+		if runes == n {
+			return s[:i] + "…"
+		}
+		runes++
 	}
-	return s[:n] + "…"
+	return s
 }
