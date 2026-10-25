@@ -14,7 +14,7 @@ Answer ONLY from the provided context. Cite pages like (p. 12).
 If the answer isn't in the context, say you couldn't find it in the document.`
 
 type Source struct {
-	Page    any     `json:"page"`
+	Page    int     `json:"page"` // 1-based
 	Score   float32 `json:"score"`
 	Snippet string  `json:"snippet"`
 }
@@ -35,8 +35,9 @@ func (s *Service) Chat(ctx context.Context, docID, sessionID, question string, k
 	sources := make([]Source, 0, len(hits))
 	for _, h := range hits {
 		text, _ := h.Payload["text"].(string)
-		fmt.Fprintf(&sb, "[Page %v]\n%s\n\n", h.Payload["page"], text)
-		sources = append(sources, Source{Page: h.Payload["page"], Score: h.Score, Snippet: truncate(text, 200)})
+		page := pageOf(h.Payload)
+		fmt.Fprintf(&sb, "[Page %d]\n%s\n\n", page, text)
+		sources = append(sources, Source{Page: page, Score: h.Score, Snippet: truncate(text, 200)})
 	}
 
 	key := docID + ":" + sessionID
@@ -60,6 +61,18 @@ func (s *Service) Chat(ctx context.Context, docID, sessionID, question string, k
 		llms.TextParts(llms.ChatMessageTypeAI, answer),
 	)
 	return answer, sources, nil
+}
+
+// pageOf reads the 1-based page number from a payload. JSON numbers decode
+// as float64, so the int stored at ingest time comes back as a float.
+func pageOf(payload map[string]any) int {
+	switch p := payload["page"].(type) {
+	case float64:
+		return int(p)
+	case int:
+		return p
+	}
+	return 0
 }
 
 func truncate(s string, n int) string {
