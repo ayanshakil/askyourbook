@@ -34,6 +34,7 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 	}
 
 	docID := uuid.NewString()
+	createdAt := time.Now().UTC().Format(time.RFC3339)
 	batches := (len(chunks) + s.batchSize - 1) / s.batchSize
 	s.log.InfoContext(ctx, "ingest started", "doc_id", docID, "filename", filename,
 		"pages", len(pages), "chunks", len(chunks), "batches", batches, "workers", s.workers)
@@ -60,7 +61,7 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 			}
 			defer func() { <-sem }()
 
-			if err := s.embedAndStore(ctx, docID, filename, batch); err != nil {
+			if err := s.embedAndStore(ctx, docID, filename, createdAt, batch); err != nil {
 				errOnce.Do(func() { firstErr = err; cancel() }) // fail fast
 			}
 		}()
@@ -68,6 +69,7 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 	wg.Wait()
 
 	if firstErr != nil {
+		s.cleanup(ctx, docID)
 		return "", 0, firstErr
 	}
 	s.log.InfoContext(ctx, "ingest finished", "doc_id", docID, "chunks", len(chunks),
@@ -75,7 +77,17 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 	return docID, len(chunks), nil
 }
 
-func (s *Service) embedAndStore(ctx context.Context, docID, filename string, batch []schema.Document) error {
+// cleanup deletes the chunks of a failed ingest so the document never
+// appears half-indexed. It runs even if ctx was cancelled.
+func (s *Service) cleanup(ctx context.Context, docID string) {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
+	defer cancel()
+	if err := s.qd.Delete(ctx, s.collection, docFilter(docID)); err != nil {
+		s.log.ErrorContext(ctx, "cleanup after failed ingest", "doc_id", docID, "err", err)
+	}
+}
+
+func (s *Service) embedAndStore(ctx context.Context, docID, filename, createdAt string, batch []schema.Document) error {
 	texts := make([]string, len(batch))
 	for i, d := range batch {
 		texts[i] = d.PageContent
@@ -94,10 +106,11 @@ func (s *Service) embedAndStore(ctx context.Context, docID, filename string, bat
 			ID:     uuid.NewString(),
 			Vector: vecs[i],
 			Payload: map[string]any{
-				"doc_id":   docID,
-				"filename": filename,
-				"page":     d.Metadata["page"],
-				"text":     d.PageContent,
+				"doc_id":     docID,
+				"filename":   filename,
+				"created_at": createdAt,
+				"page":       d.Metadata["page"],
+				"text":       d.PageContent,
 			},
 		}
 	}

@@ -45,6 +45,7 @@ func (h *Handler) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("POST /documents", h.upload)
+	mux.HandleFunc("GET /documents/{id}", h.getDocument)
 	mux.HandleFunc("POST /documents/{id}/chat", h.chat)
 	return requestID(accessLog(h.log, mux))
 }
@@ -90,6 +91,10 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 		h.log.WarnContext(r.Context(), "rejected upload", "filename", header.Filename, "err", err)
 		writeErr(w, http.StatusUnprocessableEntity, err.Error())
 		return
+	case r.Context().Err() != nil:
+		// The client went away; there's no one to respond to.
+		h.log.WarnContext(r.Context(), "ingest cancelled", "filename", header.Filename, "err", err)
+		return
 	case err != nil:
 		h.log.ErrorContext(r.Context(), "ingest failed", "filename", header.Filename, "err", err)
 		writeErr(w, http.StatusInternalServerError, "failed to process the document")
@@ -114,6 +119,35 @@ func checkPDF(f io.ReaderAt, header *multipart.FileHeader) (int, string) {
 	return 0, ""
 }
 
+// GET /documents/{id}
+func (h *Handler) getDocument(w http.ResponseWriter, r *http.Request) {
+	id, ok := docID(w, r)
+	if !ok {
+		return
+	}
+	doc, err := h.svc.Document(r.Context(), id)
+	switch {
+	case errors.Is(err, rag.ErrDocumentNotFound):
+		writeErr(w, http.StatusNotFound, "document not found")
+	case err != nil:
+		h.log.ErrorContext(r.Context(), "get document failed", "doc_id", id, "err", err)
+		writeErr(w, http.StatusInternalServerError, "failed to look up the document")
+	default:
+		writeJSON(w, http.StatusOK, doc)
+	}
+}
+
+// docID returns the {id} path value, writing a 404 if it isn't a UUID
+// (no document can have such an ID).
+func docID(w http.ResponseWriter, r *http.Request) (string, bool) {
+	id := r.PathValue("id")
+	if _, err := uuid.Parse(id); err != nil {
+		writeErr(w, http.StatusNotFound, "document not found")
+		return "", false
+	}
+	return id, true
+}
+
 type chatReq struct {
 	SessionID string `json:"session_id"`
 	Question  string `json:"question"`
@@ -122,6 +156,10 @@ type chatReq struct {
 
 // POST /documents/{id}/chat
 func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
+	id, ok := docID(w, r)
+	if !ok {
+		return
+	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxChatBodyBytes)
 	var req chatReq
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -145,9 +183,13 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	req.TopK = h.topK(req.TopK)
 
-	answer, sources, err := h.svc.Chat(r.Context(), r.PathValue("id"), req.SessionID, req.Question, req.TopK)
-	if err != nil {
-		h.log.ErrorContext(r.Context(), "chat failed", "doc_id", r.PathValue("id"), "err", err)
+	answer, sources, err := h.svc.Chat(r.Context(), id, req.SessionID, req.Question, req.TopK)
+	switch {
+	case errors.Is(err, rag.ErrDocumentNotFound):
+		writeErr(w, http.StatusNotFound, "document not found")
+		return
+	case err != nil:
+		h.log.ErrorContext(r.Context(), "chat failed", "doc_id", id, "err", err)
 		writeErr(w, http.StatusInternalServerError, "failed to answer the question")
 		return
 	}

@@ -32,6 +32,20 @@ type SearchResult struct {
 	Payload map[string]any `json:"payload"`
 }
 
+// Record is a stored point returned by Scroll (without its vector).
+type Record struct {
+	ID      any            `json:"id"`
+	Payload map[string]any `json:"payload"`
+}
+
+// Filter is a Qdrant filter object, e.g. {"must": [...]}.
+type Filter map[string]any
+
+// Match returns a filter for points whose payload key equals value.
+func Match(key, value string) Filter {
+	return Filter{"must": []any{map[string]any{"key": key, "match": map[string]any{"value": value}}}}
+}
+
 // EnsureCollection creates the collection (cosine distance) if it doesn't exist,
 // or verifies that an existing one has the expected vector size. It always
 // ensures a keyword index on doc_id so per-document filtering stays fast.
@@ -89,15 +103,13 @@ func (c *Client) Upsert(ctx context.Context, collection string, points []Point) 
 		map[string]any{"points": points}, nil)
 }
 
-// Search returns the top-k points nearest to vector, restricted to one document.
-func (c *Client) Search(ctx context.Context, collection string, vector []float32, k int, docID string) ([]SearchResult, error) {
+// Search returns the k points nearest to vector that match filter, best first.
+func (c *Client) Search(ctx context.Context, collection string, vector []float32, k int, filter Filter) ([]SearchResult, error) {
 	body := map[string]any{
 		"query":        vector,
 		"limit":        k,
 		"with_payload": true,
-		"filter": map[string]any{
-			"must": []any{map[string]any{"key": "doc_id", "match": map[string]any{"value": docID}}},
-		},
+		"filter":       filter,
 	}
 	var out struct {
 		Result struct {
@@ -109,6 +121,41 @@ func (c *Client) Search(ctx context.Context, collection string, vector []float32
 		return nil, err
 	}
 	return out.Result.Points, nil
+}
+
+// Count returns the exact number of points matching filter.
+func (c *Client) Count(ctx context.Context, collection string, filter Filter) (int, error) {
+	body := map[string]any{"exact": true, "filter": filter}
+	var out struct {
+		Result struct {
+			Count int `json:"count"`
+		} `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/collections/"+collection+"/points/count", body, &out); err != nil {
+		return 0, err
+	}
+	return out.Result.Count, nil
+}
+
+// Scroll returns up to limit points matching filter, with only the named
+// payload fields.
+func (c *Client) Scroll(ctx context.Context, collection string, filter Filter, limit int, fields ...string) ([]Record, error) {
+	body := map[string]any{"limit": limit, "filter": filter, "with_payload": fields, "with_vector": false}
+	var out struct {
+		Result struct {
+			Points []Record `json:"points"`
+		} `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/collections/"+collection+"/points/scroll", body, &out); err != nil {
+		return nil, err
+	}
+	return out.Result.Points, nil
+}
+
+// Delete removes every point matching filter and waits until it's applied.
+func (c *Client) Delete(ctx context.Context, collection string, filter Filter) error {
+	return c.do(ctx, http.MethodPost, "/collections/"+collection+"/points/delete?wait=true",
+		map[string]any{"filter": filter}, nil)
 }
 
 func (c *Client) do(ctx context.Context, method, path string, body, out any) error {

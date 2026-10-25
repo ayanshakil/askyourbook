@@ -26,11 +26,16 @@ type Source struct {
 // and asks the LLM to answer grounded in those chunks plus prior turns.
 func (s *Service) Chat(ctx context.Context, docID, sessionID, question string, k int) (string, []Source, error) {
 	start := time.Now()
+	if ok, err := s.exists(ctx, docID); err != nil {
+		return "", nil, err
+	} else if !ok {
+		return "", nil, ErrDocumentNotFound
+	}
 	qvec, err := s.embedder.EmbedQuery(ctx, question) // same model as ingestion
 	if err != nil {
 		return "", nil, fmt.Errorf("embed query: %w", err)
 	}
-	hits, err := s.qd.Search(ctx, s.collection, qvec, k, docID)
+	hits, err := s.qd.Search(ctx, s.collection, qvec, k, docFilter(docID))
 	if err != nil {
 		return "", nil, fmt.Errorf("search: %w", err)
 	}
