@@ -70,6 +70,7 @@ func main() {
 			BatchSize:    cfg.BatchSize,
 			HistoryLen:   cfg.HistoryLen,
 			Rewrite:      cfg.RewriteQueries,
+			MinScore:     cfg.ScoreThreshold,
 			Logger:       log,
 		})
 	handler := api.NewHandler(svc, api.Options{

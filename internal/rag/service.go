@@ -11,12 +11,13 @@ import (
 // Options are the Service tunables; see the config package for defaults.
 type Options struct {
 	Collection   string
-	ChunkSize    int  // characters per chunk
-	ChunkOverlap int  // characters shared by neighbouring chunks
-	Workers      int  // max concurrent embedding goroutines
-	BatchSize    int  // chunks per embedding request
-	HistoryLen   int  // messages kept per chat session
-	Rewrite      bool // rewrite follow-up questions into standalone queries
+	ChunkSize    int     // characters per chunk
+	ChunkOverlap int     // characters shared by neighbouring chunks
+	Workers      int     // max concurrent embedding goroutines
+	BatchSize    int     // chunks per embedding request
+	HistoryLen   int     // messages kept per chat session
+	Rewrite      bool    // rewrite follow-up questions into standalone queries
+	MinScore     float64 // drop hits below this cosine similarity; 0 disables
 	Logger       *slog.Logger
 }
 
@@ -30,6 +31,7 @@ type Service struct {
 	batchSize  int
 	sessions   *SessionStore
 	rewrite    bool
+	minScore   float64
 	log        *slog.Logger
 }
 
@@ -51,6 +53,7 @@ func NewService(llm ChatModel, e Embedder, qd VectorStore, opts Options) *Servic
 		batchSize: opts.BatchSize,
 		sessions:  NewSessionStore(opts.HistoryLen),
 		rewrite:   opts.Rewrite,
+		minScore:  opts.MinScore,
 		log:       log,
 	}
 }

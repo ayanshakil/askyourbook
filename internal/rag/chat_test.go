@@ -88,3 +88,27 @@ func TestChatUnknownDocument(t *testing.T) {
 		t.Fatalf("err=%v calls=%d", err, len(chat.calls))
 	}
 }
+
+func TestChatScoreThresholdDropsWeakHits(t *testing.T) {
+	s, _, chat, store := newTestService(Options{MinScore: 0.6})
+	store.scores = []float32{0.8, 0.5}
+	ans := ask(t, s, "s1", "q")
+	if len(ans.Sources) != 1 || ans.Sources[0].Score != 0.8 || len(chat.calls) != 1 {
+		t.Fatalf("sources=%+v calls=%d", ans.Sources, len(chat.calls))
+	}
+}
+
+func TestChatNothingAboveThresholdSkipsLLM(t *testing.T) {
+	s, _, chat, store := newTestService(Options{MinScore: 0.6})
+	store.scores = []float32{0.55, 0.4}
+	ans := ask(t, s, "s1", "q")
+	if ans.Text != notFoundAnswer || len(ans.Sources) != 0 || ans.Sources == nil {
+		t.Fatalf("answer=%q sources=%#v", ans.Text, ans.Sources)
+	}
+	if len(chat.calls) != 0 {
+		t.Fatalf("LLM called %d times; want 0", len(chat.calls))
+	}
+	if h := s.sessions.Get("doc:s1"); len(h) != 2 || textOf(h[1]) != notFoundAnswer {
+		t.Fatalf("history = %v; want the turn recorded", h)
+	}
+}

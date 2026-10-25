@@ -12,6 +12,9 @@ import (
 	"github.com/ayanshakil/askyourbook/internal/qdrant"
 )
 
+// notFoundAnswer is returned without calling the LLM when no chunk is similar enough.
+const notFoundAnswer = "I couldn't find anything about that in the document."
+
 const systemPrompt = `You are AskYourBook, an assistant that answers questions about a PDF.
 Answer ONLY from the provided context. Cite pages like (p. 12).
 If the answer isn't in the context, say you couldn't find it in the document.`
@@ -61,7 +64,20 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (Answer, error) {
 	if err != nil {
 		return Answer{}, fmt.Errorf("search: %w", err)
 	}
+	hits = s.aboveThreshold(ctx, hits)
+
+	ans := Answer{Sources: []Source{}}
+	if query != req.Question {
+		ans.RewrittenQuery = query
+	}
+	if len(hits) == 0 {
+		// Nothing relevant: skip the LLM rather than let it answer from nothing.
+		ans.Text = notFoundAnswer
+		s.remember(key, req.Question, ans.Text)
+		return ans, nil
+	}
 	contextBlock, sources := buildContext(hits)
+	ans.Sources = sources
 
 	msgs := []llms.MessageContent{llms.TextParts(llms.ChatMessageTypeSystem, systemPrompt)}
 	msgs = append(msgs, history...) // multi-turn memory
@@ -75,21 +91,39 @@ func (s *Service) Chat(ctx context.Context, req ChatRequest) (Answer, error) {
 	if len(resp.Choices) == 0 {
 		return Answer{}, errors.New("llm returned no choices")
 	}
-	text := resp.Choices[0].Content
+	ans.Text = resp.Choices[0].Content
 	s.logChat(ctx, req.DocID, hits, resp.Choices[0].GenerationInfo, start)
-
-	// Store the user's original question (not the rewrite or the retrieved
-	// context) to keep history small and faithful to the conversation.
-	s.sessions.Append(key,
-		llms.TextParts(llms.ChatMessageTypeHuman, req.Question),
-		llms.TextParts(llms.ChatMessageTypeAI, text),
-	)
-
-	ans := Answer{Text: text, Sources: sources}
-	if query != req.Question {
-		ans.RewrittenQuery = query
-	}
+	s.remember(key, req.Question, ans.Text)
 	return ans, nil
+}
+
+// remember stores a turn. It keeps the user's original question (not the
+// rewrite or the retrieved context) so history stays small and faithful.
+func (s *Service) remember(key, question, answer string) {
+	s.sessions.Append(key,
+		llms.TextParts(llms.ChatMessageTypeHuman, question),
+		llms.TextParts(llms.ChatMessageTypeAI, answer),
+	)
+}
+
+// aboveThreshold drops hits scoring below the configured minimum similarity.
+// Hits arrive best first, so it keeps a prefix.
+func (s *Service) aboveThreshold(ctx context.Context, hits []qdrant.SearchResult) []qdrant.SearchResult {
+	if s.minScore <= 0 {
+		return hits
+	}
+	n := 0
+	for n < len(hits) && float64(hits[n].Score) >= s.minScore {
+		n++
+	}
+	if n < len(hits) {
+		attrs := []any{"kept", n, "dropped", len(hits) - n, "min_score", s.minScore}
+		if n == 0 && len(hits) > 0 {
+			attrs = append(attrs, "top_score", hits[0].Score)
+		}
+		s.log.InfoContext(ctx, "hits below score threshold", attrs...)
+	}
+	return hits[:n]
 }
 
 // buildContext formats the hits as page-labelled context for the prompt and
