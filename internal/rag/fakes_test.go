@@ -166,6 +166,25 @@ func (f *fakeStore) Delete(_ context.Context, _ string, filter qdrant.Filter) er
 	return nil
 }
 
+func (f *fakeStore) Facet(_ context.Context, _, key string, limit int) ([]qdrant.FacetHit, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	counts := map[string]int{}
+	var order []string
+	for _, p := range f.points {
+		v := p.Payload[key].(string)
+		if counts[v] == 0 {
+			order = append(order, v)
+		}
+		counts[v]++
+	}
+	var out []qdrant.FacetHit
+	for _, v := range order[:min(limit, len(order))] {
+		out = append(out, qdrant.FacetHit{Value: v, Count: counts[v]})
+	}
+	return out, nil
+}
+
 // newTestService returns a Service over fakes with one stored document "doc".
 func newTestService(opts Options) (*Service, *fakeEmbedder, *fakeChat, *fakeStore) {
 	emb, chat, store := &fakeEmbedder{}, &fakeChat{}, &fakeStore{}

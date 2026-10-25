@@ -30,6 +30,7 @@ type VectorStore interface {
 	Count(ctx context.Context, collection string, filter qdrant.Filter) (int, error)
 	Scroll(ctx context.Context, collection string, filter qdrant.Filter, limit int, fields ...string) ([]qdrant.Record, error)
 	Delete(ctx context.Context, collection string, filter qdrant.Filter) error
+	Facet(ctx context.Context, collection, key string, limit int) ([]qdrant.FacetHit, error)
 }
 
 var _ VectorStore = (*qdrant.Client)(nil)

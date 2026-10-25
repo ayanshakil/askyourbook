@@ -152,6 +152,28 @@ func (c *Client) Scroll(ctx context.Context, collection string, filter Filter, l
 	return out.Result.Points, nil
 }
 
+// FacetHit is one distinct payload value and how many points have it.
+type FacetHit struct {
+	Value string `json:"value"`
+	Count int    `json:"count"`
+}
+
+// Facet returns up to limit distinct values of a keyword payload field with
+// exact point counts. The field must have a payload index. Values whose
+// points were all deleted can still appear with a count of 0.
+func (c *Client) Facet(ctx context.Context, collection, key string, limit int) ([]FacetHit, error) {
+	body := map[string]any{"key": key, "limit": limit, "exact": true}
+	var out struct {
+		Result struct {
+			Hits []FacetHit `json:"hits"`
+		} `json:"result"`
+	}
+	if err := c.do(ctx, http.MethodPost, "/collections/"+collection+"/facet", body, &out); err != nil {
+		return nil, err
+	}
+	return out.Result.Hits, nil
+}
+
 // Delete removes every point matching filter and waits until it's applied.
 func (c *Client) Delete(ctx context.Context, collection string, filter Filter) error {
 	return c.do(ctx, http.MethodPost, "/collections/"+collection+"/points/delete?wait=true",

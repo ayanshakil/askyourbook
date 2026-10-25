@@ -45,7 +45,9 @@ func (h *Handler) Routes() http.Handler {
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 	})
 	mux.HandleFunc("POST /documents", h.upload)
+	mux.HandleFunc("GET /documents", h.listDocuments)
 	mux.HandleFunc("GET /documents/{id}", h.getDocument)
+	mux.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
 	mux.HandleFunc("POST /documents/{id}/chat", h.chat)
 	mux.HandleFunc("POST /documents/{id}/chat/stream", h.chatStream)
 	return requestID(accessLog(h.log, mux))
@@ -145,6 +147,37 @@ func (h *Handler) getDocument(w http.ResponseWriter, r *http.Request) {
 		writeErr(w, http.StatusInternalServerError, "failed to look up the document")
 	default:
 		writeJSON(w, http.StatusOK, doc)
+	}
+}
+
+// GET /documents
+func (h *Handler) listDocuments(w http.ResponseWriter, r *http.Request) {
+	docs, err := h.svc.ListDocuments(r.Context())
+	if err != nil {
+		h.log.ErrorContext(r.Context(), "list documents failed", "err", err)
+		writeErr(w, http.StatusInternalServerError, "failed to list documents")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"documents": docs})
+}
+
+// DELETE /documents/{id}
+func (h *Handler) deleteDocument(w http.ResponseWriter, r *http.Request) {
+	id, ok := docID(w, r)
+	if !ok {
+		return
+	}
+	err := h.svc.DeleteDocument(r.Context(), id)
+	switch {
+	case errors.Is(err, rag.ErrDocumentNotFound):
+		writeErr(w, http.StatusNotFound, "document not found")
+	case errors.Is(err, rag.ErrDocumentNotReady):
+		writeErr(w, http.StatusConflict, err.Error())
+	case err != nil:
+		h.log.ErrorContext(r.Context(), "delete document failed", "doc_id", id, "err", err)
+		writeErr(w, http.StatusInternalServerError, "failed to delete the document")
+	default:
+		w.WriteHeader(http.StatusNoContent)
 	}
 }
 
