@@ -68,10 +68,11 @@ def esc(s):
 
 
 def page_stream(title, body, number):
-    lines = ["BT", f"/F1 18 Tf {LEFT} {TOP} Td ({esc(title)}) Tj", "/F1 11 Tf"]
-    lines.append(f"0 {-2 * LEADING} Td")
+    # T* (next line) rather than Td, as most PDF generators do: the Go PDF
+    # loader only emits a line break on T*, so Td-only text runs together.
+    lines = ["BT", f"{LEADING} TL", f"/F1 18 Tf {LEFT} {TOP} Td ({esc(title)}) Tj T* T*", "/F1 11 Tf"]
     for line in textwrap.wrap(body, 85):
-        lines.append(f"({esc(line)}) Tj 0 {-LEADING} Td")
+        lines.append(f"({esc(line)}) Tj T*")
     lines.append("ET")
     lines.append(f"BT /F1 9 Tf {PAGE_W // 2 - 10} 40 Td (Page {number}) Tj ET")
     return "\n".join(lines).encode("latin-1")
