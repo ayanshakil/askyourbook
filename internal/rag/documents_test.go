@@ -10,10 +10,10 @@ import (
 
 func TestListDocumentsMergesPendingAndReady(t *testing.T) {
 	s, emb, _, store := newTestService(Options{})
-	emb.release = make(chan struct{})
-	t.Cleanup(func() { close(emb.release); s.Shutdown(context.Background()) })
+	emb.Release = make(chan struct{})
+	t.Cleanup(func() { close(emb.Release); s.Shutdown(context.Background()) })
 
-	store.points = append(store.points,
+	store.Points = append(store.Points,
 		qdrant.Point{ID: "3", Payload: map[string]any{"doc_id": "older", "filename": "a.pdf", "created_at": "2026-01-01T00:00:00Z"}},
 		qdrant.Point{ID: "4", Payload: map[string]any{"doc_id": "newer", "filename": "b.pdf", "created_at": "2026-06-01T00:00:00Z"}},
 		qdrant.Point{ID: "5", Payload: map[string]any{"doc_id": "newer", "filename": "b.pdf", "created_at": "2026-06-01T00:00:00Z"}},
@@ -67,14 +67,14 @@ func TestDeleteDocument(t *testing.T) {
 	}
 
 	// A processing document can't be deleted; a failed one can.
-	emb.release = make(chan struct{})
+	emb.Release = make(chan struct{})
 	f, size := openSample(t)
 	doc, _ := s.Ingest(ctx, f, size, "sample.pdf")
 	if err := s.DeleteDocument(ctx, doc.ID); !errors.Is(err, ErrDocumentNotReady) {
 		t.Fatalf("delete while processing: err = %v", err)
 	}
-	emb.docErr = errors.New("boom")
-	close(emb.release)
+	emb.Fail = func(int) error { return errors.New("boom") }
+	close(emb.Release)
 	waitStatus(t, s, doc.ID, StatusFailed)
 	if err := s.DeleteDocument(ctx, doc.ID); err != nil {
 		t.Fatalf("delete failed doc: %v", err)

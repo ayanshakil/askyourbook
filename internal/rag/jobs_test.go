@@ -10,7 +10,12 @@ import (
 
 func openSample(t *testing.T) (*os.File, int64) {
 	t.Helper()
-	f, err := os.Open("../../testdata/sample.pdf")
+	return openPDF(t, "sample.pdf")
+}
+
+func openPDF(t *testing.T, name string) (*os.File, int64) {
+	t.Helper()
+	f, err := os.Open("../../testdata/" + name)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +43,7 @@ func waitStatus(t *testing.T, s *Service, id, want string) Document {
 func TestIngestRunsInBackground(t *testing.T) {
 	s, emb, _, store := newTestService(Options{})
 	t.Cleanup(func() { s.Shutdown(context.Background()) })
-	emb.release = make(chan struct{})
+	emb.Release = make(chan struct{})
 
 	f, size := openSample(t)
 	doc, err := s.Ingest(context.Background(), f, size, "sample.pdf")
@@ -58,7 +63,7 @@ func TestIngestRunsInBackground(t *testing.T) {
 		t.Fatalf("chat while processing: err = %v", err)
 	}
 
-	close(emb.release)
+	close(emb.Release)
 	ready := waitStatus(t, s, doc.ID, StatusReady)
 	if ready.Chunks != 6 || ready.Filename != "sample.pdf" {
 		t.Fatalf("ready doc = %+v", ready)
@@ -71,7 +76,7 @@ func TestIngestRunsInBackground(t *testing.T) {
 func TestIngestFailureIsRecordedAndCleanedUp(t *testing.T) {
 	s, emb, _, store := newTestService(Options{BatchSize: 1, Workers: 1, ChunkSize: 1000, ChunkOverlap: 100})
 	t.Cleanup(func() { s.Shutdown(context.Background()) })
-	emb.docErr = errors.New("provider down")
+	emb.Fail = func(int) error { return errors.New("provider down") }
 
 	f, size := openSample(t)
 	doc, err := s.Ingest(context.Background(), f, size, "sample.pdf")
@@ -93,8 +98,8 @@ func TestIngestFailureIsRecordedAndCleanedUp(t *testing.T) {
 
 func TestIngestQueueFull(t *testing.T) {
 	s, emb, _, _ := newTestService(Options{IngestJobs: 1, QueueSize: 1})
-	emb.release = make(chan struct{})
-	t.Cleanup(func() { close(emb.release); s.Shutdown(context.Background()) })
+	emb.Release = make(chan struct{})
+	t.Cleanup(func() { close(emb.Release); s.Shutdown(context.Background()) })
 
 	f, size := openSample(t)
 	var errs []error
@@ -110,7 +115,7 @@ func TestIngestQueueFull(t *testing.T) {
 
 func TestShutdownCancelsAfterTimeout(t *testing.T) {
 	s, emb, _, store := newTestService(Options{})
-	emb.release = make(chan struct{}) // never released: the ingest hangs
+	emb.Release = make(chan struct{}) // never released: the ingest hangs
 
 	f, size := openSample(t)
 	doc, err := s.Ingest(context.Background(), f, size, "sample.pdf")
