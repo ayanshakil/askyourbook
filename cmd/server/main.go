@@ -3,7 +3,7 @@ package main
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,6 +17,7 @@ import (
 
 	"github.com/ayanshakil/askyourbook/internal/api"
 	"github.com/ayanshakil/askyourbook/internal/config"
+	"github.com/ayanshakil/askyourbook/internal/logging"
 	"github.com/ayanshakil/askyourbook/internal/qdrant"
 	"github.com/ayanshakil/askyourbook/internal/rag"
 )
@@ -33,21 +34,26 @@ func main() {
 
 	cfg, err := config.Load()
 	if err != nil {
-		log.Fatalf("config: %v", err)
+		fatal(slog.Default(), "config", err)
 	}
+	log, err := logging.New(os.Stderr, cfg.LogFormat, cfg.LogLevel)
+	if err != nil {
+		fatal(slog.Default(), "logging", err)
+	}
+	slog.SetDefault(log)
 
 	llm, err := newLLM(ctx, cfg)
 	if err != nil {
-		log.Fatalf("llm: %v", err)
+		fatal(log, "llm", err)
 	}
 	embedder, err := embeddings.NewEmbedder(llm)
 	if err != nil {
-		log.Fatalf("embedder: %v", err)
+		fatal(log, "embedder", err)
 	}
 
 	qd := qdrant.New(cfg.QdrantURL)
 	if err := qd.EnsureCollection(ctx, cfg.Collection, cfg.EmbeddingDim); err != nil {
-		log.Fatalf("qdrant: %v", err)
+		fatal(log, "qdrant", err)
 	}
 
 	svc := rag.NewService(llm, embedder, qd, rag.Options{
@@ -57,11 +63,13 @@ func main() {
 		Workers:      cfg.Workers,
 		BatchSize:    cfg.BatchSize,
 		HistoryLen:   cfg.HistoryLen,
+		Logger:       log,
 	})
 	handler := api.NewHandler(svc, api.Options{
 		MaxUploadBytes: cfg.MaxUploadBytes,
 		TopKDefault:    cfg.TopKDefault,
 		TopKMax:        cfg.TopKMax,
+		Logger:         log,
 	})
 
 	srv := &http.Server{
@@ -72,10 +80,10 @@ func main() {
 	}
 
 	go func() {
-		log.Printf("AskYourBook listening on %s (provider %s, chat %s, embeddings %s, collection %s)",
-			srv.Addr, cfg.Provider, cfg.ChatModel, cfg.EmbeddingModel, cfg.Collection)
+		log.Info("AskYourBook listening", "addr", srv.Addr, "provider", cfg.Provider,
+			"chat_model", cfg.ChatModel, "embedding_model", cfg.EmbeddingModel, "collection", cfg.Collection)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			log.Fatal(err)
+			fatal(log, "http server", err)
 		}
 	}()
 
@@ -85,8 +93,15 @@ func main() {
 	<-stop
 	shutdownCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	_ = srv.Shutdown(shutdownCtx)
-	log.Println("server stopped")
+	if err := srv.Shutdown(shutdownCtx); err != nil {
+		log.Error("shutdown", "err", err)
+	}
+	log.Info("server stopped")
+}
+
+func fatal(log *slog.Logger, what string, err error) {
+	log.Error(what, "err", err)
+	os.Exit(1)
 }
 
 // newLLM returns the client for the configured provider. API keys are read

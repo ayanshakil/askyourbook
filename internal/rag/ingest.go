@@ -7,6 +7,7 @@ import (
 	"io"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/tmc/langchaingo/documentloaders"
@@ -19,6 +20,7 @@ import (
 // Ingest loads a PDF, splits it into chunks, embeds the chunks concurrently,
 // and upserts them into Qdrant. It returns the new document ID.
 func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filename string) (string, int, error) {
+	start := time.Now()
 	pages, err := documentloaders.NewPDF(r, size).Load(ctx) // one Document per page
 	if err != nil {
 		return "", 0, fmt.Errorf("load pdf: %w", err)
@@ -33,6 +35,9 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 	}
 
 	docID := uuid.NewString()
+	batches := (len(chunks) + s.batchSize - 1) / s.batchSize
+	s.log.InfoContext(ctx, "ingest started", "doc_id", docID, "filename", filename,
+		"pages", len(pages), "chunks", len(chunks), "batches", batches, "workers", s.workers)
 
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -66,6 +71,8 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 	if firstErr != nil {
 		return "", 0, firstErr
 	}
+	s.log.InfoContext(ctx, "ingest finished", "doc_id", docID, "chunks", len(chunks),
+		"duration_ms", time.Since(start).Milliseconds())
 	return docID, len(chunks), nil
 }
 

@@ -2,7 +2,7 @@ package api
 
 import (
 	"encoding/json"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -16,14 +16,22 @@ type Options struct {
 	MaxUploadBytes int64
 	TopKDefault    int
 	TopKMax        int
+	Logger         *slog.Logger
 }
 
 type Handler struct {
 	svc  *rag.Service
 	opts Options
+	log  *slog.Logger
 }
 
-func NewHandler(svc *rag.Service, opts Options) *Handler { return &Handler{svc: svc, opts: opts} }
+func NewHandler(svc *rag.Service, opts Options) *Handler {
+	log := opts.Logger
+	if log == nil {
+		log = slog.Default()
+	}
+	return &Handler{svc: svc, opts: opts, log: log}
+}
 
 // Routes uses Go 1.22 method+path patterns.
 func (h *Handler) Routes() http.Handler {
@@ -33,7 +41,7 @@ func (h *Handler) Routes() http.Handler {
 	})
 	mux.HandleFunc("POST /documents", h.upload)
 	mux.HandleFunc("POST /documents/{id}/chat", h.chat)
-	return logging(mux)
+	return requestID(accessLog(h.log, mux))
 }
 
 // POST /documents  (multipart form, field "file")
@@ -57,6 +65,7 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	// multipart.File implements io.ReaderAt, which the PDF loader needs.
 	docID, n, err := h.svc.Ingest(r.Context(), file, header.Size, header.Filename)
 	if err != nil {
+		h.log.ErrorContext(r.Context(), "ingest failed", "filename", header.Filename, "err", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -85,6 +94,7 @@ func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
 
 	answer, sources, err := h.svc.Chat(r.Context(), r.PathValue("id"), req.SessionID, req.Question, req.TopK)
 	if err != nil {
+		h.log.ErrorContext(r.Context(), "chat failed", "doc_id", r.PathValue("id"), "err", err)
 		writeErr(w, http.StatusInternalServerError, err.Error())
 		return
 	}
@@ -103,11 +113,4 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 
 func writeErr(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
-}
-
-func logging(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		log.Printf("%s %s", r.Method, r.URL.Path)
-		next.ServeHTTP(w, r)
-	})
 }

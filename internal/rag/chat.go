@@ -5,8 +5,11 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/tmc/langchaingo/llms"
+
+	"github.com/ayanshakil/askyourbook/internal/qdrant"
 )
 
 const systemPrompt = `You are AskYourBook, an assistant that answers questions about a PDF.
@@ -22,6 +25,7 @@ type Source struct {
 // Chat embeds the question, retrieves the top-k chunks for this document,
 // and asks the LLM to answer grounded in those chunks plus prior turns.
 func (s *Service) Chat(ctx context.Context, docID, sessionID, question string, k int) (string, []Source, error) {
+	start := time.Now()
 	qvec, err := s.embedder.EmbedQuery(ctx, question) // same model as ingestion
 	if err != nil {
 		return "", nil, fmt.Errorf("embed query: %w", err)
@@ -54,6 +58,7 @@ func (s *Service) Chat(ctx context.Context, docID, sessionID, question string, k
 		return "", nil, errors.New("llm returned no choices")
 	}
 	answer := resp.Choices[0].Content
+	s.logChat(ctx, docID, hits, resp.Choices[0].GenerationInfo, start)
 
 	// Store the bare question (not the retrieved context) to keep history small.
 	s.sessions.Append(key,
@@ -73,6 +78,23 @@ func pageOf(payload map[string]any) int {
 		return p
 	}
 	return 0
+}
+
+func (s *Service) logChat(ctx context.Context, docID string, hits []qdrant.SearchResult, info map[string]any, start time.Time) {
+	attrs := []any{"doc_id", docID, "hits", len(hits), "duration_ms", time.Since(start).Milliseconds()}
+	if len(hits) > 0 {
+		attrs = append(attrs, "top_score", hits[0].Score)
+	}
+	// Both the googleai and openai clients report usage under these keys.
+	// For Gemini 2.5, total also includes hidden "thinking" tokens.
+	for _, k := range [][2]string{
+		{"PromptTokens", "prompt_tokens"}, {"CompletionTokens", "completion_tokens"}, {"TotalTokens", "total_tokens"},
+	} {
+		if v, ok := info[k[0]]; ok {
+			attrs = append(attrs, k[1], v)
+		}
+	}
+	s.log.InfoContext(ctx, "chat answered", attrs...)
 }
 
 func truncate(s string, n int) string {

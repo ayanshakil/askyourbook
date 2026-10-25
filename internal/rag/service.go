@@ -1,6 +1,7 @@
 package rag
 
 import (
+	"log/slog"
 	"sync"
 
 	"github.com/tmc/langchaingo/embeddings"
@@ -18,6 +19,7 @@ type Options struct {
 	Workers      int // max concurrent embedding goroutines
 	BatchSize    int // chunks per embedding request
 	HistoryLen   int // messages kept per chat session
+	Logger       *slog.Logger
 }
 
 type Service struct {
@@ -29,9 +31,14 @@ type Service struct {
 	workers    int
 	batchSize  int
 	sessions   *SessionStore
+	log        *slog.Logger
 }
 
 func NewService(llm llms.Model, e embeddings.Embedder, qd *qdrant.Client, opts Options) *Service {
+	log := opts.Logger
+	if log == nil {
+		log = slog.Default()
+	}
 	return &Service{
 		llm:        llm,
 		embedder:   e,
@@ -44,6 +51,7 @@ func NewService(llm llms.Model, e embeddings.Embedder, qd *qdrant.Client, opts O
 		workers:   opts.Workers,
 		batchSize: opts.BatchSize,
 		sessions:  NewSessionStore(opts.HistoryLen),
+		log:       log,
 	}
 }
 
