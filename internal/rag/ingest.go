@@ -82,6 +82,11 @@ func (s *Service) index(ctx context.Context, doc Document, chunks []schema.Docum
 				return
 			}
 			defer func() { <-s.embedSem }()
+			// select picks randomly when a slot frees up just as another
+			// batch fails, so re-check before starting the call.
+			if ctx.Err() != nil {
+				return
+			}
 
 			if err := s.embedAndStore(ctx, doc.ID, doc.Filename, createdAt, batch); err != nil {
 				errOnce.Do(func() { firstErr = err; cancel() }) // fail fast
