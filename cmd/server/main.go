@@ -10,6 +10,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/tmc/langchaingo/embeddings"
 	"github.com/tmc/langchaingo/llms"
 	"github.com/tmc/langchaingo/llms/googleai"
@@ -21,6 +22,7 @@ import (
 	"github.com/ayanshakil/askyourbook/internal/qdrant"
 	"github.com/ayanshakil/askyourbook/internal/rag"
 	"github.com/ayanshakil/askyourbook/internal/retry"
+	"github.com/ayanshakil/askyourbook/internal/session"
 )
 
 // llmClient is a chat model that can also create embeddings. Ingestion and
@@ -58,6 +60,12 @@ func main() {
 		fatal(log, "qdrant", err)
 	}
 
+	sessions, closeSessions, err := newSessionStore(ctx, cfg)
+	if err != nil {
+		fatal(log, "sessions", err)
+	}
+	defer closeSessions()
+
 	svc := rag.NewService(
 		retry.NewChatModel(llm, policy, log),
 		retry.NewEmbedder(embedder, policy, log),
@@ -70,7 +78,7 @@ func main() {
 			BatchSize:    cfg.BatchSize,
 			IngestJobs:   cfg.IngestJobs,
 			QueueSize:    cfg.IngestQueue,
-			HistoryLen:   cfg.HistoryLen,
+			Sessions:     sessions,
 			Rewrite:      cfg.RewriteQueries,
 			MinScore:     cfg.ScoreThreshold,
 			Logger:       log,
@@ -91,7 +99,8 @@ func main() {
 
 	go func() {
 		log.Info("AskYourBook listening", "addr", srv.Addr, "provider", cfg.Provider,
-			"chat_model", cfg.ChatModel, "embedding_model", cfg.EmbeddingModel, "collection", cfg.Collection)
+			"chat_model", cfg.ChatModel, "embedding_model", cfg.EmbeddingModel, "collection", cfg.Collection,
+			"session_store", cfg.SessionStore)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fatal(log, "http server", err)
 		}
@@ -115,6 +124,26 @@ func main() {
 		log.Error("ingest shutdown", "err", err)
 	}
 	log.Info("server stopped")
+}
+
+// newSessionStore returns the configured chat-history store and a func that
+// releases it. A Redis store is pinged so a bad REDIS_URL fails at startup.
+func newSessionStore(ctx context.Context, cfg config.Config) (rag.SessionStore, func(), error) {
+	if cfg.SessionStore == "memory" {
+		return session.NewMemory(cfg.HistoryLen, cfg.SessionTTL), func() {}, nil
+	}
+	opts, err := redis.ParseURL(cfg.RedisURL)
+	if err != nil {
+		return nil, nil, fmt.Errorf("REDIS_URL: %w", err)
+	}
+	rdb := redis.NewClient(opts)
+	pingCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := rdb.Ping(pingCtx).Err(); err != nil {
+		rdb.Close()
+		return nil, nil, fmt.Errorf("redis ping %s: %w", opts.Addr, err)
+	}
+	return session.NewRedis(rdb, cfg.HistoryLen, cfg.SessionTTL), func() { rdb.Close() }, nil
 }
 
 func fatal(log *slog.Logger, what string, err error) {

@@ -56,7 +56,7 @@ func TestChatFollowUpIsRewritten(t *testing.T) {
 	if last := textOf(answer[len(answer)-1]); !strings.Contains(last, "Question: What should I use instead?") {
 		t.Errorf("answer prompt = %q", last)
 	}
-	hist := s.sessions.Get("doc:s1")
+	hist := history(t, s, "doc:s1")
 	if len(hist) != 4 || textOf(hist[2]) != "What should I use instead?" || hist[2].Role != llms.ChatMessageTypeHuman {
 		t.Errorf("history = %v", hist)
 	}
@@ -108,7 +108,7 @@ func TestChatNothingAboveThresholdSkipsLLM(t *testing.T) {
 	if len(chat.calls) != 0 {
 		t.Fatalf("LLM called %d times; want 0", len(chat.calls))
 	}
-	if h := s.sessions.Get("doc:s1"); len(h) != 2 || textOf(h[1]) != notFoundAnswer {
+	if h := history(t, s, "doc:s1"); len(h) != 2 || textOf(h[1]) != notFoundAnswer {
 		t.Fatalf("history = %v; want the turn recorded", h)
 	}
 }
@@ -127,7 +127,7 @@ func TestChatStreamDeliversChunksAndStoresTurn(t *testing.T) {
 	if len(ans.Sources) != 2 {
 		t.Fatalf("sources = %+v", ans.Sources)
 	}
-	if h := s.sessions.Get("doc:s1"); len(h) != 2 || textOf(h[1]) != "the answer" {
+	if h := history(t, s, "doc:s1"); len(h) != 2 || textOf(h[1]) != "the answer" {
 		t.Fatalf("history = %v", h)
 	}
 }
@@ -140,7 +140,7 @@ func TestChatStreamAbortedByCallerIsNotStored(t *testing.T) {
 	if !errors.Is(err, gone) {
 		t.Fatalf("err = %v", err)
 	}
-	if h := s.sessions.Get("doc:s1"); len(h) != 0 {
+	if h := history(t, s, "doc:s1"); len(h) != 0 {
 		t.Fatalf("history = %v; an aborted turn must not be stored", h)
 	}
 }
@@ -154,4 +154,13 @@ func TestChatStreamNotFoundIsStreamed(t *testing.T) {
 	if err != nil || got != notFoundAnswer || len(chat.calls) != 0 {
 		t.Fatalf("err=%v streamed=%q calls=%d", err, got, len(chat.calls))
 	}
+}
+
+func history(t *testing.T, s *Service, key string) []llms.MessageContent {
+	t.Helper()
+	h, err := s.sessions.Get(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h
 }

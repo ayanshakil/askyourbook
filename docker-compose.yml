@@ -5,5 +5,21 @@ services:
       - "6333:6333"   # REST API + dashboard at http://localhost:6333/dashboard
     volumes:
       - qdrant_data:/qdrant/storage
+
+  redis:
+    image: redis:8.10.2-alpine
+    ports:
+      - "${REDIS_PORT:-6379}:6379"   # set REDIS_PORT if a local Redis already uses 6379
+    # Append-only file so chat sessions survive a Redis restart.
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
 volumes:
   qdrant_data:
+  redis_data:

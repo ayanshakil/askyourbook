@@ -35,6 +35,10 @@ type Config struct {
 	RewriteQueries bool    // REWRITE_QUERIES: rewrite follow-ups into standalone queries
 	HistoryLen     int     // HISTORY_MESSAGES: messages kept per session
 
+	SessionStore string        // SESSION_STORE: memory or redis
+	RedisURL     string        // REDIS_URL, e.g. redis://localhost:6379/0
+	SessionTTL   time.Duration // SESSION_TTL: idle sessions are forgotten after this
+
 	MaxUploadBytes int64 // MAX_UPLOAD_MB, stored in bytes
 
 	MaxRetries     int           // LLM_MAX_RETRIES: retries after the first attempt
@@ -92,6 +96,10 @@ func load(getenv func(string) string) (Config, error) {
 	c.RewriteQueries = e.bool("REWRITE_QUERIES", true)
 	c.HistoryLen = e.int("HISTORY_MESSAGES", 10)
 
+	c.SessionStore = e.str("SESSION_STORE", "memory")
+	c.RedisURL = e.str("REDIS_URL", "redis://localhost:6379/0")
+	c.SessionTTL = e.duration("SESSION_TTL", 24*time.Hour)
+
 	c.MaxUploadBytes = int64(e.int("MAX_UPLOAD_MB", 50)) << 20
 
 	c.MaxRetries = e.int("LLM_MAX_RETRIES", 4)
@@ -122,6 +130,8 @@ func (c Config) validate() error {
 	check(c.TopKDefault > 0 && c.TopKDefault <= c.TopKMax, "TOP_K_DEFAULT must be in [1, TOP_K_MAX]")
 	check(c.ScoreThreshold >= 0 && c.ScoreThreshold <= 1, "SCORE_THRESHOLD must be in [0, 1]")
 	check(c.HistoryLen >= 0, "HISTORY_MESSAGES must not be negative")
+	check(c.SessionStore == "memory" || c.SessionStore == "redis", "SESSION_STORE must be memory or redis")
+	check(c.SessionTTL > 0, "SESSION_TTL must be positive")
 	check(c.MaxUploadBytes > 0, "MAX_UPLOAD_MB must be positive")
 	check(c.MaxRetries >= 0, "LLM_MAX_RETRIES must not be negative")
 	check(c.RetryBaseDelay > 0 && c.RetryBaseDelay <= c.RetryMaxDelay,

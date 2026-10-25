@@ -33,4 +33,11 @@ type VectorStore interface {
 	Facet(ctx context.Context, collection, key string, limit int) ([]qdrant.FacetHit, error)
 }
 
+// SessionStore keeps recent chat history per session. Implementations
+// (internal/session) trim old messages and expire idle sessions.
+type SessionStore interface {
+	Get(ctx context.Context, id string) ([]llms.MessageContent, error)
+	Append(ctx context.Context, id string, msgs ...llms.MessageContent) error
+}
+
 var _ VectorStore = (*qdrant.Client)(nil)

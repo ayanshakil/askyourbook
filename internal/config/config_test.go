@@ -62,6 +62,7 @@ func TestLoadErrors(t *testing.T) {
 		"default above max":   {map[string]string{"TOP_K_DEFAULT": "30"}, "TOP_K_DEFAULT"},
 		"model without dim":   {map[string]string{"EMBEDDING_MODEL": "other"}, "EMBEDDING_DIM"},
 		"threshold above one": {map[string]string{"SCORE_THRESHOLD": "1.5"}, "SCORE_THRESHOLD"},
+		"unknown store":       {map[string]string{"SESSION_STORE": "postgres"}, "SESSION_STORE"},
 	}
 	for name, tt := range tests {
 		t.Run(name, func(t *testing.T) {

@@ -61,7 +61,10 @@ func (s *Service) chat(ctx context.Context, req ChatRequest, onText func(string)
 	}
 
 	key := req.DocID + ":" + req.SessionID
-	history := s.sessions.Get(key)
+	history, err := s.sessions.Get(ctx, key)
+	if err != nil {
+		return Answer{}, fmt.Errorf("load history: %w", err)
+	}
 
 	// Follow-ups like "what about the second one?" retrieve poorly on their
 	// own, so they're rewritten into a standalone query before embedding.
@@ -88,7 +91,7 @@ func (s *Service) chat(ctx context.Context, req ChatRequest, onText func(string)
 				return Answer{}, err
 			}
 		}
-		s.remember(key, req.Question, ans.Text)
+		s.remember(ctx, key, req.Question, ans.Text)
 		return ans, nil
 	}
 	contextBlock, sources := buildContext(hits)
@@ -114,17 +117,21 @@ func (s *Service) chat(ctx context.Context, req ChatRequest, onText func(string)
 	}
 	ans.Text = resp.Choices[0].Content
 	s.logChat(ctx, req.DocID, hits, resp.Choices[0].GenerationInfo, start)
-	s.remember(key, req.Question, ans.Text)
+	s.remember(ctx, key, req.Question, ans.Text)
 	return ans, nil
 }
 
 // remember stores a turn. It keeps the user's original question (not the
 // rewrite or the retrieved context) so history stays small and faithful.
-func (s *Service) remember(key, question, answer string) {
-	s.sessions.Append(key,
+// The answer has already been produced, so a storage error is only logged.
+func (s *Service) remember(ctx context.Context, key, question, answer string) {
+	err := s.sessions.Append(ctx, key,
 		llms.TextParts(llms.ChatMessageTypeHuman, question),
 		llms.TextParts(llms.ChatMessageTypeAI, answer),
 	)
+	if err != nil {
+		s.log.ErrorContext(ctx, "save chat history", "session", key, "err", err)
+	}
 }
 
 // aboveThreshold drops hits scoring below the configured minimum similarity.
