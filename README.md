@@ -11,15 +11,19 @@ chat history → LLM answers with page citations.
 
 ## Run
 ```bash
-docker compose up -d                 # Qdrant on :6333 (dashboard: /dashboard)
-export OPENAI_API_KEY=sk-...
-go mod tidy                          # pulls langchaingo, uuid
-go run ./cmd/server
+cp .env.example .env                 # set GOOGLE_API_KEY (or LLM_PROVIDER=openai + OPENAI_API_KEY)
+make up                              # Qdrant on :6333 (dashboard: /dashboard)
+make run                             # API on :8080
 ```
+
+| `LLM_PROVIDER` | Chat model | Embedding model | Dim | Qdrant collection |
+|---|---|---|---|---|
+| `gemini` (default) | gemini-2.5-flash | gemini-embedding-001 | 3072 | `askyourbook_gemini` |
+| `openai` | gpt-4o-mini | text-embedding-3-small | 1536 | `askyourbook_openai` |
 
 ## Try it
 ```bash
-curl -F "file=@mybook.pdf" localhost:8080/documents
+curl -F "file=@testdata/sample.pdf" localhost:8080/documents
 # -> {"document_id":"<ID>","chunks":212,...}
 
 curl -X POST localhost:8080/documents/<ID>/chat \
