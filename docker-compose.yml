@@ -1,8 +1,9 @@
 services:
   api:
     build: .
+    # Published on localhost only; nothing here has authentication.
     ports:
-      - "${API_PORT:-8080}:8080"
+      - "127.0.0.1:${API_PORT:-8080}:8080"
     # API keys and tunables come from .env; the addresses below point at the
     # other services on the compose network and take precedence.
     env_file:
@@ -18,14 +19,15 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    # Shutdown waits up to 10s for HTTP requests and 30s for ingests.
-    stop_grace_period: 45s
+    # Shutdown waits up to 10s for HTTP requests, 30s for ingests, then up to
+    # 30s for cancelled ingests to clean up their partial chunks.
+    stop_grace_period: 80s
     restart: unless-stopped
 
   qdrant:
     image: qdrant/qdrant:v1.19.2
     ports:
-      - "6333:6333"   # REST API + dashboard at http://localhost:6333/dashboard
+      - "127.0.0.1:6333:6333"   # REST API + dashboard at http://localhost:6333/dashboard
     volumes:
       - qdrant_data:/qdrant/storage
     healthcheck:
@@ -38,7 +40,7 @@ services:
   redis:
     image: redis:8.10.2-alpine
     ports:
-      - "${REDIS_PORT:-6379}:6379"   # set REDIS_PORT if a local Redis already uses 6379
+      - "127.0.0.1:${REDIS_PORT:-6379}:6379"   # set REDIS_PORT if a local Redis already uses 6379
     # Append-only file so chat sessions survive a Redis restart.
     command: ["redis-server", "--appendonly", "yes"]
     volumes:

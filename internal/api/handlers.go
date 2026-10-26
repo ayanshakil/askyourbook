@@ -52,7 +52,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("POST /documents/{id}/chat", h.chat)
 	mux.HandleFunc("POST /documents/{id}/chat/stream", h.chatStream)
 	web.Register(mux) // the chat UI at /
-	return requestID(accessLog(h.log, mux))
+	return requestID(accessLog(h.log, sameOrigin(mux)))
 }
 
 const (

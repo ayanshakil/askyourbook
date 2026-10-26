@@ -3,6 +3,7 @@ package api
 import (
 	"log/slog"
 	"net/http"
+	"net/url"
 	"regexp"
 	"time"
 
@@ -25,6 +26,41 @@ func requestID(next http.Handler) http.Handler {
 		w.Header().Set("X-Request-ID", id)
 		next.ServeHTTP(w, r.WithContext(logging.WithRequestID(r.Context(), id)))
 	})
+}
+
+// sameOrigin rejects state-changing requests that a browser marks as coming
+// from another site, so a web page the user happens to visit can't upload or
+// delete documents, or spend the LLM quota, through this API. Browsers send
+// Sec-Fetch-Site (and Origin) on such requests; curl and other non-browser
+// clients send neither and are unaffected.
+func sameOrigin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet, http.MethodHead, http.MethodOptions:
+			next.ServeHTTP(w, r)
+			return
+		}
+		if crossOrigin(r) {
+			writeErr(w, http.StatusForbidden, "cross-origin request blocked")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func crossOrigin(r *http.Request) bool {
+	switch r.Header.Get("Sec-Fetch-Site") {
+	case "same-origin", "none": // the UI itself, or the user typing a URL
+		return false
+	case "same-site", "cross-site":
+		return true
+	}
+	// Older browsers: fall back to comparing the Origin header with the host.
+	if origin := r.Header.Get("Origin"); origin != "" {
+		u, err := url.Parse(origin)
+		return err != nil || u.Host != r.Host
+	}
+	return false
 }
 
 // accessLog logs one line per request with its status, size and duration.

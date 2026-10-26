@@ -392,3 +392,45 @@ func TestListAndDeleteDocuments(t *testing.T) {
 		t.Fatalf("list after delete = %s", body)
 	}
 }
+
+func TestCrossOriginWritesAreBlocked(t *testing.T) {
+	e := newEnv(t, 1<<20)
+	post := func(headers map[string]string) int {
+		req, _ := http.NewRequest(http.MethodPost, e.srv.URL+"/documents/"+readyID+"/chat",
+			strings.NewReader(`{"question":"q"}`))
+		req.Header.Set("Content-Type", "application/json")
+		for k, v := range headers {
+			req.Header.Set(k, v)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	host := strings.TrimPrefix(e.srv.URL, "http://")
+	tests := []struct {
+		name    string
+		headers map[string]string
+		want    int
+	}{
+		{"curl (no browser headers)", nil, http.StatusOK},
+		{"the UI itself", map[string]string{"Sec-Fetch-Site": "same-origin", "Origin": e.srv.URL}, http.StatusOK},
+		{"another website", map[string]string{"Sec-Fetch-Site": "cross-site", "Origin": "https://evil.example"}, http.StatusForbidden},
+		{"another local port", map[string]string{"Sec-Fetch-Site": "same-site"}, http.StatusForbidden},
+		{"old browser, foreign Origin", map[string]string{"Origin": "https://evil.example"}, http.StatusForbidden},
+		{"old browser, own Origin", map[string]string{"Origin": "http://" + host}, http.StatusOK},
+	}
+	for _, tt := range tests {
+		if got := post(tt.headers); got != tt.want {
+			t.Errorf("%s: status %d, want %d", tt.name, got, tt.want)
+		}
+	}
+	// Reads are never blocked.
+	req, _ := http.NewRequest(http.MethodGet, e.srv.URL+"/documents", nil)
+	req.Header.Set("Sec-Fetch-Site", "cross-site")
+	if resp, err := http.DefaultClient.Do(req); err != nil || resp.StatusCode != http.StatusOK {
+		t.Errorf("cross-site GET blocked: %v %v", resp.StatusCode, err)
+	}
+}

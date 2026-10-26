@@ -92,10 +92,14 @@ func main() {
 	})
 
 	srv := &http.Server{
-		Addr:         ":" + cfg.Port,
-		Handler:      handler.Routes(),
-		ReadTimeout:  60 * time.Second,
-		WriteTimeout: 120 * time.Second,
+		Addr:    ":" + cfg.Port,
+		Handler: handler.Routes(),
+		// Headers must arrive quickly; bodies get longer: an upload on a slow
+		// link, or a chat whose LLM calls are retried, can take minutes.
+		ReadHeaderTimeout: 10 * time.Second,
+		ReadTimeout:       5 * time.Minute,
+		WriteTimeout:      5 * time.Minute,
+		IdleTimeout:       2 * time.Minute,
 	}
 
 	go func() {
