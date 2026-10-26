@@ -7,6 +7,8 @@ retrieved by cosine similarity, and an LLM answers from those chunks only, citin
 page numbers. Conversations are multi-turn, and follow-up questions are rewritten
 into standalone queries before retrieval.
 
+- **Browser chat UI** at `http://localhost:8080`: upload a PDF, then chat with
+  streamed answers and clickable page citations
 - **REST API** on the standard library (`net/http` with Go 1.22 routing), no web framework
 - **Concurrent ingestion**: goroutines, a semaphore channel, a `WaitGroup` and
   context cancellation, written by hand
@@ -42,7 +44,12 @@ make up                       # Qdrant on :6333 (dashboard at /dashboard), Redis
 make run                      # API on :8080, reads .env
 ```
 
-Then:
+Then open **http://localhost:8080** in your browser: click **Upload PDF** (or drag a
+PDF onto the page), wait for it to show *Ready*, and start asking questions. Answers
+stream in; click a page citation such as `p. 37` to see the passage it came from.
+Follow-up questions keep the conversation's context; **New chat** starts over.
+
+Or use the API directly:
 
 ```bash
 # Upload: returns 202 at once; indexing continues in the background.
@@ -71,7 +78,7 @@ curl -N -X POST localhost:8080/documents/<ID>/chat/stream \
 
 ```mermaid
 flowchart LR
-    Client([Client])
+    Client(["Browser UI / API client"])
 
     subgraph API["AskYourBook API (Go)"]
         H["HTTP handlers<br/>validation, request IDs,<br/>SSE"]
@@ -121,6 +128,7 @@ retrieved context, so it stays small.
 ```
 cmd/server/            wiring: config, LLM provider, Qdrant, sessions, graceful shutdown
 internal/api/          HTTP handlers, validation, SSE, request-ID and access-log middleware
+internal/web/          browser chat UI (HTML/CSS/JS embedded in the binary, served at /)
 internal/rag/          ingestion (worker pool, concurrent embedding), chat, documents
 internal/qdrant/       minimal Qdrant REST client
 internal/session/      chat history stores: in-memory and Redis
@@ -140,6 +148,7 @@ every log line for that request.
 
 | Method | Path | Description |
 |---|---|---|
+| `GET` | `/` | The browser chat UI |
 | `GET` | `/health` | Liveness: `{"status":"ok"}` |
 | `POST` | `/documents` | Upload a PDF (multipart field `file`) |
 | `GET` | `/documents` | List documents, newest first |
@@ -313,6 +322,14 @@ cancels the LLM call, and an interrupted turn is not saved to history.
 idle sessions instead of growing forever. `redis` stores each session as a capped list
 (`RPUSH` + `LTRIM` + `EXPIRE` in one `MULTI`), so history survives restarts and is
 shared across replicas.
+
+**A UI with no frontend toolchain.** The chat page is plain HTML, CSS and JavaScript
+embedded in the Go binary with `go:embed` and served from the same origin as the API,
+so there's no Node build, no CORS, and the Docker image ships it automatically. It
+reads the SSE stream with `fetch` (EventSource can't POST), renders a small Markdown
+subset after escaping all text (document content can't inject HTML), and is served
+with a strict Content-Security-Policy that allows no inline scripts. Each document's
+conversation is kept in `localStorage`, so a refresh doesn't lose it.
 
 ### Known limitations
 

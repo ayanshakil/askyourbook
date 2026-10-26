@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AskYourBook</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='7' fill='%234f46e5'/%3E%3Cpath d='M9 9h9a5 5 0 0 1 5 5v9H14a5 5 0 0 1-5-5z' fill='white'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <div class="app" id="app">
+    <aside class="sidebar" id="sidebar">
+      <div class="brand">
+        <span class="logo" aria-hidden="true"></span>
+        <span>AskYourBook</span>
+      </div>
+
+      <button class="btn btn-primary upload-btn" id="upload-btn" type="button">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 3v10M5.5 7.5 10 3l4.5 4.5M4 15.5h12" /></svg>
+        Upload PDF
+      </button>
+      <input type="file" id="file-input" accept="application/pdf,.pdf" hidden>
+      <p class="hint">or drop a PDF anywhere</p>
+
+      <h2 class="section-title">Documents</h2>
+      <ul class="doc-list" id="doc-list" aria-label="Documents"></ul>
+      <p class="empty-docs" id="empty-docs" hidden>No documents yet.</p>
+    </aside>
+
+    <main class="main">
+      <header class="topbar">
+        <button class="icon-btn menu-btn" id="menu-btn" type="button" aria-label="Show documents">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M3 5h14M3 10h14M3 15h14" /></svg>
+        </button>
+        <div class="title" id="title">AskYourBook</div>
+        <button class="btn btn-ghost" id="new-chat" type="button" hidden>New chat</button>
+      </header>
+
+      <section class="messages" id="messages" aria-live="polite"></section>
+
+      <form class="composer" id="composer">
+        <textarea id="question" rows="1" placeholder="Upload a PDF to start" disabled
+                  aria-label="Your question"></textarea>
+        <button class="btn btn-primary send" id="send" type="submit" disabled aria-label="Send">
+          <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M4 10h11M10.5 5.5 15 10l-4.5 4.5" /></svg>
+        </button>
+      </form>
+    </main>
+  </div>
+
+  <div class="drop-overlay" id="drop-overlay" hidden>
+    <div class="drop-card">Drop your PDF to upload it</div>
+  </div>
+  <div class="toast" id="toast" role="status" hidden></div>
+</body>
+</html>

@@ -14,6 +14,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ayanshakil/askyourbook/internal/rag"
+	"github.com/ayanshakil/askyourbook/internal/web"
 )
 
 // Options are the HTTP-layer limits; see the config package for defaults.
@@ -50,6 +51,7 @@ func (h *Handler) Routes() http.Handler {
 	mux.HandleFunc("DELETE /documents/{id}", h.deleteDocument)
 	mux.HandleFunc("POST /documents/{id}/chat", h.chat)
 	mux.HandleFunc("POST /documents/{id}/chat/stream", h.chatStream)
+	web.Register(mux) // the chat UI at /
 	return requestID(accessLog(h.log, mux))
 }
 
