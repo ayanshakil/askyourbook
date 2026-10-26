@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -16,7 +17,9 @@ type Config struct {
 	LogFormat string // LOG_FORMAT: text or json
 	LogLevel  string // LOG_LEVEL: debug, info, warn or error
 
-	Provider       string // LLM_PROVIDER: gemini or openai
+	Provider       string // LLM_PROVIDER: gemini or openai; chosen from the API key if unset
+	ProviderSource string // what selected the provider, for the startup log
+	APIKey         Secret // GOOGLE_API_KEY / GEMINI_API_KEY or OPENAI_API_KEY
 	ChatModel      string // CHAT_MODEL
 	EmbeddingModel string // EMBEDDING_MODEL
 	EmbeddingDim   int    // EMBEDDING_DIM; must match EMBEDDING_MODEL
@@ -47,6 +50,13 @@ type Config struct {
 	RetryMaxDelay  time.Duration // LLM_RETRY_MAX_DELAY, e.g. 10s
 }
 
+// Secret holds an API key. It prints as "[redacted]" so it can't leak into
+// logs or error messages through fmt.
+type Secret string
+
+func (Secret) String() string   { return "[redacted]" }
+func (Secret) GoString() string { return "[redacted]" }
+
 // providerDefaults are the models used when CHAT_MODEL / EMBEDDING_MODEL are unset.
 var providerDefaults = map[string]struct {
 	chat, embedding string
@@ -68,13 +78,11 @@ func load(getenv func(string) string) (Config, error) {
 		QdrantURL: e.str("QDRANT_URL", "http://localhost:6333"),
 		LogFormat: e.str("LOG_FORMAT", "text"),
 		LogLevel:  e.str("LOG_LEVEL", "info"),
-		Provider:  e.str("LLM_PROVIDER", "gemini"),
 	}
-
-	def, ok := providerDefaults[c.Provider]
-	if !ok {
-		return Config{}, fmt.Errorf("LLM_PROVIDER: unknown provider %q (want gemini or openai)", c.Provider)
+	if err := c.chooseProvider(e); err != nil {
+		return Config{}, err
 	}
+	def := providerDefaults[c.Provider]
 	c.ChatModel = e.str("CHAT_MODEL", def.chat)
 	c.EmbeddingModel = e.str("EMBEDDING_MODEL", def.embedding)
 	c.EmbeddingDim = e.int("EMBEDDING_DIM", def.dim)
@@ -112,6 +120,64 @@ func load(getenv func(string) string) (Config, error) {
 		return Config{}, e.err
 	}
 	return c, c.validate()
+}
+
+// chooseProvider picks the LLM provider and its API key. LLM_PROVIDER wins
+// if set; otherwise the provider is whichever key is present (Gemini if both).
+func (c *Config) chooseProvider(e env) error {
+	googleKey, googleVar := firstSet(e, "GOOGLE_API_KEY", "GEMINI_API_KEY")
+	openaiKey, openaiVar := firstSet(e, "OPENAI_API_KEY")
+
+	switch explicit := strings.ToLower(strings.TrimSpace(e.get("LLM_PROVIDER"))); {
+	case explicit != "":
+		c.Provider, c.ProviderSource = explicit, "LLM_PROVIDER"
+	case googleKey != "":
+		c.Provider, c.ProviderSource = "gemini", googleVar
+	case openaiKey != "":
+		c.Provider, c.ProviderSource = "openai", openaiVar
+	default:
+		return errors.New("no LLM API key found: set GOOGLE_API_KEY (for Gemini) or OPENAI_API_KEY " +
+			"(for OpenAI) in .env" + misspeltKeyHint(e))
+	}
+
+	switch c.Provider {
+	case "gemini":
+		if googleKey == "" {
+			return errors.New("LLM_PROVIDER=gemini needs GOOGLE_API_KEY (or GEMINI_API_KEY)" + misspeltKeyHint(e))
+		}
+		c.APIKey = Secret(googleKey)
+	case "openai":
+		if openaiKey == "" {
+			return errors.New("LLM_PROVIDER=openai needs OPENAI_API_KEY" + misspeltKeyHint(e))
+		}
+		c.APIKey = Secret(openaiKey)
+	default:
+		return fmt.Errorf("LLM_PROVIDER: unknown provider %q (want gemini or openai)", c.Provider)
+	}
+	return nil
+}
+
+// firstSet returns the first of the named variables that has a value.
+func firstSet(e env, names ...string) (value, name string) {
+	for _, n := range names {
+		if v := strings.TrimSpace(e.get(n)); v != "" {
+			return v, n
+		}
+	}
+	return "", ""
+}
+
+// misspeltKeyHint points out likely typos of the API key variable names.
+func misspeltKeyHint(e env) string {
+	for _, typo := range [][2]string{
+		{"OPEN_API_KEY", "OPENAI_API_KEY"}, {"OPENAI_KEY", "OPENAI_API_KEY"},
+		{"GOOGLE_KEY", "GOOGLE_API_KEY"}, {"GEMINI_KEY", "GEMINI_API_KEY"},
+	} {
+		if e.get(typo[0]) != "" {
+			return fmt.Sprintf(" (found %s; did you mean %s?)", typo[0], typo[1])
+		}
+	}
+	return ""
 }
 
 func (c Config) validate() error {

@@ -33,7 +33,7 @@ Retrieval-Augmented Generation (RAG) backend written in Go, with a small built-i
 |---|---|
 | Language | Go 1.24+, standard library `net/http` (no web framework) |
 | LLM framework | [LangChainGo](https://github.com/tmc/langchaingo): PDF loading, text splitting, embeddings, chat |
-| Models | Google Gemini by default (`gemini-2.5-flash`, `gemini-embedding-001`); OpenAI optional |
+| Models | Google Gemini (`gemini-2.5-flash`, `gemini-embedding-001`) or OpenAI (`gpt-4o-mini`, `text-embedding-3-small`), chosen by which API key you provide |
 | Vector database | [Qdrant](https://qdrant.tech), through a small hand-written REST client |
 | Sessions | In-memory or Redis |
 | UI | Plain HTML, CSS and JavaScript, embedded in the binary |
@@ -41,14 +41,24 @@ Retrieval-Augmented Generation (RAG) backend written in Go, with a small built-i
 
 ## Quick start
 
-**You need:** Docker (with Compose v2.24 or newer) and a free
-[Gemini API key](https://aistudio.google.com/apikey). To run the API outside Docker you
-also need Go 1.24 or newer.
+**You need:** Docker (with Compose v2.24 or newer) and an API key from either
+**Google Gemini** ([free key](https://aistudio.google.com/apikey)) or **OpenAI**
+([key](https://platform.openai.com/api-keys)). To run the API outside Docker you also
+need Go 1.24 or newer.
 
 ```bash
 git clone https://github.com/ayanshakil/askyourbook.git
 cd askyourbook
-cp .env.example .env          # then set GOOGLE_API_KEY=... in .env
+cp .env.example .env
+```
+
+Open `.env` and fill in **one** key. AskYourBook picks the provider from whichever key
+is present:
+
+```bash
+GOOGLE_API_KEY=your-gemini-key        # Gemini (GEMINI_API_KEY works too)
+# or
+OPENAI_API_KEY=your-openai-key        # OpenAI
 ```
 
 **Option A: everything in Docker**
@@ -269,8 +279,9 @@ Settings come from environment variables; `make run` and `make stack` read them 
 
 | Variable | Default | Description |
 |---|---|---|
-| `LLM_PROVIDER` | `gemini` | `gemini` or `openai` |
-| `GOOGLE_API_KEY` / `OPENAI_API_KEY` | | API key for the chosen provider |
+| `GOOGLE_API_KEY` (or `GEMINI_API_KEY`) | | Gemini API key |
+| `OPENAI_API_KEY` | | OpenAI API key |
+| `LLM_PROVIDER` | chosen from the key | `gemini` or `openai`. Unset: whichever key is present (Gemini if both) |
 | `CHAT_MODEL` | `gemini-2.5-flash` / `gpt-4o-mini` | Chat model |
 | `EMBEDDING_MODEL` | `gemini-embedding-001` / `text-embedding-3-small` | Embedding model |
 | `EMBEDDING_DIM` | `3072` / `1536` | Vector size; required if `EMBEDDING_MODEL` is changed |
@@ -294,6 +305,22 @@ Settings come from environment variables; `make run` and `make stack` read them 
 | `LLM_MAX_RETRIES` | `4` | Retries on 429, 5xx and network errors |
 | `LLM_RETRY_BASE_DELAY` / `LLM_RETRY_MAX_DELAY` | `500ms` / `10s` | Backoff bounds |
 | `LOG_FORMAT` / `LOG_LEVEL` | `text` / `info` | `text` or `json`; `debug`, `info`, `warn` or `error` |
+
+### Gemini or OpenAI
+
+Either provider runs the whole pipeline: embedding the PDF chunks, embedding questions,
+rewriting follow-ups and writing answers. One provider is used at a time, because a
+question must be embedded by the same model as the document it is searched against.
+
+| | Gemini | OpenAI |
+|---|---|---|
+| Chat model | `gemini-2.5-flash` | `gpt-4o-mini` |
+| Embedding model | `gemini-embedding-001` (3072 dimensions) | `text-embedding-3-small` (1536 dimensions) |
+| Qdrant collection | `askyourbook_gemini` | `askyourbook_openai` |
+
+Each provider gets its own Qdrant collection, since their embeddings aren't comparable.
+Switching providers therefore shows a separate document list: upload your PDFs again
+after switching. `CHAT_MODEL`, `EMBEDDING_MODEL` and `EMBEDDING_DIM` override the models.
 
 ## Design decisions
 
@@ -412,7 +439,9 @@ TEST_REDIS_URL=redis://localhost:6379/15 make test-integration
 | `address already in use` on port 8080 | `PORT=8081 make run` (or `API_PORT=8081 make stack`) |
 | `qdrant: ... connection refused` at startup | Start Qdrant with `make up` |
 | Chat returns `409` | The document is still being indexed; wait a few seconds |
-| Chat returns `500` | Check the server log; it is usually an invalid or rate-limited API key |
+| `no LLM API key found` at startup | Put `GOOGLE_API_KEY=...` or `OPENAI_API_KEY=...` in `.env` (no spaces around `=`) |
+| Documents disappeared after changing the key | Each provider has its own collection; switch back, or upload them again |
+| Upload shows *Failed*, or chat returns `500` | Check the server log; it is usually an invalid or rate-limited API key |
 
 ## License
 

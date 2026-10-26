@@ -103,7 +103,8 @@ func main() {
 	}
 
 	go func() {
-		log.Info("AskYourBook listening", "addr", srv.Addr, "provider", cfg.Provider,
+		log.Info("AskYourBook listening", "addr", srv.Addr,
+			"provider", cfg.Provider, "provider_chosen_by", cfg.ProviderSource,
 			"chat_model", cfg.ChatModel, "embedding_model", cfg.EmbeddingModel, "collection", cfg.Collection,
 			"session_store", cfg.SessionStore)
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
@@ -156,17 +157,18 @@ func fatal(log *slog.Logger, what string, err error) {
 	os.Exit(1)
 }
 
-// newLLM returns the client for the configured provider. API keys are read
-// from the environment (GOOGLE_API_KEY or OPENAI_API_KEY).
+// newLLM returns the client for the configured provider.
 func newLLM(ctx context.Context, cfg config.Config) (llmClient, error) {
 	switch cfg.Provider {
 	case "gemini":
 		return googleai.New(ctx,
+			googleai.WithAPIKey(string(cfg.APIKey)),
 			googleai.WithDefaultModel(cfg.ChatModel),
 			googleai.WithDefaultEmbeddingModel(cfg.EmbeddingModel),
 		)
 	case "openai":
 		return openai.New(
+			openai.WithToken(string(cfg.APIKey)),
 			openai.WithModel(cfg.ChatModel),
 			openai.WithEmbeddingModel(cfg.EmbeddingModel),
 		)
