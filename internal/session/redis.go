@@ -48,6 +48,9 @@ func (r *Redis) Get(ctx context.Context, id string) ([]llms.MessageContent, erro
 }
 
 func (r *Redis) Append(ctx context.Context, id string, msgs ...llms.MessageContent) error {
+	if r.maxMsgs <= 0 {
+		return nil // history disabled; LTRIM with -0 would keep everything
+	}
 	values := make([]any, len(msgs))
 	for i, m := range msgs {
 		b, err := json.Marshal(storedMessage{Role: m.Role, Text: text(m)})

@@ -12,8 +12,10 @@ import (
 	"github.com/tmc/langchaingo/llms"
 )
 
-// pruneInterval is how often the memory store sweeps expired sessions.
-const pruneInterval = time.Minute
+const (
+	pruneInterval = time.Minute // how often the memory store sweeps expired sessions
+	maxSessions   = 10_000      // beyond this, the least recently used session is dropped
+)
 
 // Memory is an in-process session store. History is lost on restart and
 // isn't shared between replicas; use Redis for that.
@@ -23,6 +25,7 @@ type Memory struct {
 	ttl       time.Duration
 	data      map[string]*memSession
 	lastPrune time.Time
+	limit     int              // max sessions held
 	now       func() time.Time // for tests
 }
 
@@ -32,7 +35,7 @@ type memSession struct {
 }
 
 func NewMemory(maxMsgs int, ttl time.Duration) *Memory {
-	return &Memory{maxMsgs: maxMsgs, ttl: ttl, data: map[string]*memSession{}, now: time.Now}
+	return &Memory{maxMsgs: maxMsgs, ttl: ttl, data: map[string]*memSession{}, limit: maxSessions, now: time.Now}
 }
 
 func (m *Memory) Get(_ context.Context, id string) ([]llms.MessageContent, error) {
@@ -51,6 +54,9 @@ func (m *Memory) Append(_ context.Context, id string, msgs ...llms.MessageConten
 	now := m.now()
 	s, ok := m.data[id]
 	if !ok || now.After(s.expires) {
+		if !ok && len(m.data) >= m.limit {
+			m.makeRoomLocked(now)
+		}
 		s = &memSession{}
 		m.data[id] = s
 	}
@@ -59,13 +65,33 @@ func (m *Memory) Append(_ context.Context, id string, msgs ...llms.MessageConten
 
 	if now.Sub(m.lastPrune) > pruneInterval {
 		m.lastPrune = now
-		for id, s := range m.data {
-			if now.After(s.expires) {
-				delete(m.data, id)
-			}
-		}
+		m.pruneLocked(now)
 	}
 	return nil
+}
+
+func (m *Memory) pruneLocked(now time.Time) {
+	for id, s := range m.data {
+		if now.After(s.expires) {
+			delete(m.data, id)
+		}
+	}
+}
+
+// makeRoomLocked frees a slot: expired sessions go first, otherwise the one
+// idle the longest (expiry is last use plus the TTL).
+func (m *Memory) makeRoomLocked(now time.Time) {
+	m.pruneLocked(now)
+	if len(m.data) < m.limit {
+		return
+	}
+	var oldest string
+	for id, s := range m.data {
+		if oldest == "" || s.expires.Before(m.data[oldest].expires) {
+			oldest = id
+		}
+	}
+	delete(m.data, oldest)
 }
 
 // Len reports how many sessions are held, including expired ones not yet pruned.

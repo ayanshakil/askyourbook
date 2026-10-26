@@ -127,3 +127,47 @@ func TestRedis(t *testing.T) {
 		}
 	})
 }
+
+func TestMemoryEvictsLeastRecentlyUsedAtLimit(t *testing.T) {
+	m := NewMemory(6, time.Hour)
+	m.limit = 2
+	now := time.Now()
+	m.now = func() time.Time { return now }
+	ctx := context.Background()
+
+	_ = m.Append(ctx, "a", human("1"))
+	now = now.Add(time.Second)
+	_ = m.Append(ctx, "b", human("1"))
+	now = now.Add(time.Second)
+	_ = m.Append(ctx, "a", human("2")) // a is now the most recently used
+	now = now.Add(time.Second)
+	_ = m.Append(ctx, "c", human("1")) // full: b goes
+
+	if m.Len() != 2 {
+		t.Fatalf("Len = %d, want 2", m.Len())
+	}
+	if h, _ := m.Get(ctx, "b"); len(h) != 0 {
+		t.Error("b should have been evicted")
+	}
+	if h, _ := m.Get(ctx, "a"); len(h) != 2 {
+		t.Errorf("a = %v, want both messages kept", h)
+	}
+}
+
+func TestZeroHistoryStoresNothing(t *testing.T) {
+	ctx := context.Background()
+	stores := map[string]store{"memory": NewMemory(0, time.Hour)}
+	if url := os.Getenv("TEST_REDIS_URL"); url != "" {
+		opts, _ := redis.ParseURL(url)
+		rdb := redis.NewClient(opts)
+		t.Cleanup(func() { rdb.Close() })
+		stores["redis"] = NewRedis(rdb, 0, time.Minute)
+	}
+	for name, s := range stores {
+		id := uuid.NewString()
+		_ = s.Append(ctx, id, human("q"), ai("a"))
+		if h, _ := s.Get(ctx, id); len(h) != 0 {
+			t.Errorf("%s: kept %d messages with a limit of 0", name, len(h))
+		}
+	}
+}
