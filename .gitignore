@@ -1,4 +1,13 @@
+# Secrets
 .env
+
+# Build and test output
 /bin/
 *.test
 coverage.out
+
+# OS and editor files
+.DS_Store
+.idea/
+.vscode/
+*.swp
