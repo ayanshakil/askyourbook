@@ -57,7 +57,7 @@ function conv(docId) {
 
 function persist(docId) {
   const c = state.convs[docId];
-  if (!c) return;
+  if (!c || !state.docs.some((d) => d.id === docId)) return; // deleted meanwhile
   const messages = c.messages.filter((m) => !m.pending).slice(-MAX_STORED_MESSAGES);
   save("ayb:chat:" + docId, { sessionId: c.sessionId, messages });
 }
@@ -188,7 +188,8 @@ function renderDocs() {
     del.setAttribute("aria-label", `Delete ${doc.filename}`);
     del.innerHTML = '<svg viewBox="0 0 20 20" aria-hidden="true"><path d="M5 5l10 10M15 5 5 15" /></svg>';
     del.addEventListener("click", (e) => { e.stopPropagation(); deleteDoc(doc); });
-    if (doc.status === "processing") del.disabled = true;
+    // Can't delete while it's indexing or while one of its answers streams.
+    if (doc.status === "processing" || state.streaming === doc.id) del.disabled = true;
 
     li.append(text, del);
     return li;
@@ -375,6 +376,7 @@ async function ask(question) {
   state.streaming = docId;
   el.question.value = "";
   autosize();
+  renderDocs();
   renderMain();
 
   // Re-render only the answer while it streams, and only if it's on screen.
@@ -409,6 +411,7 @@ async function ask(question) {
   answer.pending = false;
   state.streaming = null;
   persist(docId);
+  renderDocs();
   if (state.currentId === docId) renderMain();
   else setComposer(currentDoc()?.status === "ready", el.question.placeholder);
 }
@@ -465,6 +468,8 @@ function inline(text) {
     return part
       .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
       .replace(/(^|[^*])\*([^*\s][^*]*)\*/g, "$1<em>$2</em>")
+      // Keep a parenthesised group like "(p. 3, p. 7)" on one line.
+      .replace(/\(((?:p\.\s?\d{1,4}(?:,\s*)?)+)\)/g, '<span class="cites">($1)</span>')
       .replace(/\bp\.\s?(\d{1,4})\b/g, '<button type="button" class="cite" data-page="$1">p. $1</button>');
   }).join("");
 }

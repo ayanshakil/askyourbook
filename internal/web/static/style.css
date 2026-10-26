@@ -278,7 +278,8 @@ svg {
   color: var(--accent);
   border: 0;
   border-radius: 6px;
-  padding: 0 .4em;
+  padding: 0 .3em;
+  margin: 0 .05em;
   font: inherit;
   font-size: .88em;
   font-weight: 600;
@@ -286,6 +287,7 @@ svg {
 }
 
 .cite:hover { text-decoration: underline; }
+.cites { white-space: nowrap; }
 
 .typing { display: inline-flex; gap: 4px; padding: 4px 0; }
 .typing span {
