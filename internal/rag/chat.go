@@ -105,6 +105,9 @@ func (s *Service) chat(ctx context.Context, req ChatRequest, onText func(string)
 	opts := []llms.CallOption{llms.WithTemperature(0.2)}
 	if onText != nil {
 		opts = append(opts, llms.WithStreamingFunc(func(_ context.Context, chunk []byte) error {
+			if len(chunk) == 0 {
+				return nil // don't start a stream (and its 200) for nothing
+			}
 			return onText(string(chunk))
 		}))
 	}
@@ -116,6 +119,12 @@ func (s *Service) chat(ctx context.Context, req ChatRequest, onText func(string)
 		return Answer{}, errors.New("llm returned no choices")
 	}
 	ans.Text = resp.Choices[0].Content
+	if strings.TrimSpace(ans.Text) == "" {
+		// e.g. a safety block, or Gemini spending its token budget on thinking.
+		// Storing an empty turn could break later requests in the session.
+		s.log.WarnContext(ctx, "empty answer", "doc_id", req.DocID, "stop_reason", resp.Choices[0].StopReason)
+		return Answer{}, ErrEmptyAnswer
+	}
 	s.logChat(ctx, req.DocID, hits, resp.Choices[0].GenerationInfo, start)
 	s.remember(ctx, key, req.Question, ans.Text)
 	return ans, nil

@@ -22,7 +22,14 @@ import (
 // slow, network-bound part runs asynchronously. The returned document has
 // status "processing"; Document reports when it is ready or failed.
 func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filename string) (Document, error) {
+	// Parsing holds the whole text in memory, so only a few run at once.
+	select {
+	case s.parseSem <- struct{}{}:
+	case <-ctx.Done():
+		return Document{}, ctx.Err()
+	}
 	pages, err := documentloaders.NewPDF(r, size).Load(ctx) // one Document per page
+	<-s.parseSem
 	if err != nil {
 		return Document{}, fmt.Errorf("%w: %v", ErrInvalidPDF, err)
 	}
@@ -33,6 +40,10 @@ func (s *Service) Ingest(ctx context.Context, r io.ReaderAt, size int64, filenam
 	chunks = nonEmpty(chunks)
 	if len(chunks) == 0 {
 		return Document{}, ErrNoText
+	}
+	if len(chunks) > s.maxChunks {
+		return Document{}, fmt.Errorf("%w: %d chunks (about %d pages); the limit is %d chunks",
+			ErrTooManyChunks, len(chunks), len(pages), s.maxChunks)
 	}
 
 	doc := Document{
@@ -88,7 +99,7 @@ func (s *Service) index(ctx context.Context, doc Document, chunks []schema.Docum
 				return
 			}
 
-			if err := s.embedAndStore(ctx, doc.ID, doc.Filename, createdAt, batch); err != nil {
+			if err := s.embedAndStore(ctx, doc, createdAt, batch); err != nil {
 				errOnce.Do(func() { firstErr = err; cancel() }) // fail fast
 			}
 		}()
@@ -117,7 +128,7 @@ func (s *Service) cleanup(ctx context.Context, docID string) {
 	}
 }
 
-func (s *Service) embedAndStore(ctx context.Context, docID, filename, createdAt string, batch []schema.Document) error {
+func (s *Service) embedAndStore(ctx context.Context, doc Document, createdAt string, batch []schema.Document) error {
 	texts := make([]string, len(batch))
 	for i, d := range batch {
 		texts[i] = d.PageContent
@@ -136,11 +147,12 @@ func (s *Service) embedAndStore(ctx context.Context, docID, filename, createdAt 
 			ID:     uuid.NewString(),
 			Vector: vecs[i],
 			Payload: map[string]any{
-				"doc_id":     docID,
-				"filename":   filename,
-				"created_at": createdAt,
-				"page":       d.Metadata["page"],
-				"text":       d.PageContent,
+				"doc_id":       doc.ID,
+				"filename":     doc.Filename,
+				"created_at":   createdAt,
+				"total_chunks": doc.Chunks, // lets lookups detect a partial ingest
+				"page":         d.Metadata["page"],
+				"text":         d.PageContent,
 			},
 		}
 	}

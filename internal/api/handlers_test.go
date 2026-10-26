@@ -25,6 +25,7 @@ const readyID = "11111111-1111-4111-8111-111111111111"
 type env struct {
 	srv   *httptest.Server
 	emb   *ragtest.Embedder
+	chat  *ragtest.ChatModel
 	store *ragtest.Store
 	svc   *rag.Service
 }
@@ -44,7 +45,7 @@ func newEnv(t *testing.T, maxUpload int64) *env {
 		srv.Close()
 		svc.Shutdown(context.Background())
 	})
-	return &env{srv: srv, emb: emb, store: store, svc: svc}
+	return &env{srv: srv, emb: emb, chat: chat, store: store, svc: svc}
 }
 
 func (e *env) do(t *testing.T, method, path, contentType string, body io.Reader) (*http.Response, []byte) {
@@ -156,7 +157,7 @@ func TestUploadValidation(t *testing.T) {
 		{"wrong extension", "file", "notes.txt", []byte("hello"), 415, "only .pdf"},
 		{"not a pdf inside", "file", "fake.pdf", []byte("just text"), 415, "not a PDF"},
 		{"empty file", "file", "empty.pdf", nil, 400, "empty"},
-		{"unreadable pdf", "file", "broken.pdf", []byte("%PDF-1.4\ngarbage"), 422, "not a readable PDF"},
+		{"unreadable pdf", "file", "broken.pdf", []byte("%PDF-1.4\ngarbage"), 422, "file is not a readable PDF"},
 		{"no text", "file", "blank.pdf", blankPDF(), 422, "no extractable text"},
 		{"too large", "file", "guide.pdf", readFile(t, "cpp_programming_guide.pdf"), 413, "upload limit"},
 	}
@@ -168,6 +169,13 @@ func TestUploadValidation(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("parser details stay out of responses", func(t *testing.T) {
+		_, body := e.upload(t, "file", "broken.pdf", []byte("%PDF-1.4\ngarbage"))
+		if msg := errorOf(t, body); msg != "file is not a readable PDF" {
+			t.Fatalf("error = %q", msg)
+		}
+	})
 
 	t.Run("not multipart", func(t *testing.T) {
 		resp, _ := e.postJSON(t, "/documents", `{"file":"x"}`)
@@ -279,6 +287,18 @@ func TestChatResponse(t *testing.T) {
 	}
 	if strings.Contains(string(body), "rewritten_query") {
 		t.Error("rewritten_query should be omitted for a first question")
+	}
+}
+
+func TestChatEmptyAnswerIs502(t *testing.T) {
+	e := newEnv(t, 1<<20)
+	blank := ""
+	e.chat.Reply = &blank
+	for _, path := range []string{"/chat", "/chat/stream"} {
+		resp, body := e.postJSON(t, "/documents/"+readyID+path, `{"question":"q"}`)
+		if resp.StatusCode != http.StatusBadGateway || !strings.Contains(errorOf(t, body), "empty answer") {
+			t.Errorf("%s: %d %s", path, resp.StatusCode, body)
+		}
 	}
 }
 

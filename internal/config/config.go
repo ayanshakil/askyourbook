@@ -28,6 +28,7 @@ type Config struct {
 	BatchSize    int // EMBED_BATCH_SIZE: chunks per embedding call
 	IngestJobs   int // INGEST_WORKERS: documents indexed concurrently in the background
 	IngestQueue  int // INGEST_QUEUE: documents that can wait for a worker
+	MaxChunks    int // MAX_CHUNKS: larger documents are rejected with 413
 
 	TopKDefault    int     // TOP_K_DEFAULT
 	TopKMax        int     // TOP_K_MAX
@@ -89,6 +90,7 @@ func load(getenv func(string) string) (Config, error) {
 	c.BatchSize = e.int("EMBED_BATCH_SIZE", 32)
 	c.IngestJobs = e.int("INGEST_WORKERS", 2)
 	c.IngestQueue = e.int("INGEST_QUEUE", 16)
+	c.MaxChunks = e.int("MAX_CHUNKS", 2000)
 
 	c.TopKDefault = e.int("TOP_K_DEFAULT", 4)
 	c.TopKMax = e.int("TOP_K_MAX", 20)
@@ -126,6 +128,7 @@ func (c Config) validate() error {
 	check(c.BatchSize > 0, "EMBED_BATCH_SIZE must be positive")
 	check(c.IngestJobs > 0, "INGEST_WORKERS must be positive")
 	check(c.IngestQueue >= 0, "INGEST_QUEUE must not be negative")
+	check(c.MaxChunks > 0, "MAX_CHUNKS must be positive")
 	check(c.TopKMax > 0, "TOP_K_MAX must be positive")
 	check(c.TopKDefault > 0 && c.TopKDefault <= c.TopKMax, "TOP_K_DEFAULT must be in [1, TOP_K_MAX]")
 	check(c.ScoreThreshold >= 0 && c.ScoreThreshold <= 1, "SCORE_THRESHOLD must be in [0, 1]")

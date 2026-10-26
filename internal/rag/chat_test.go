@@ -166,3 +166,24 @@ func history(t *testing.T, s *Service, key string) []llms.MessageContent {
 	}
 	return h
 }
+
+func TestChatEmptyAnswerIsAnErrorAndNotStored(t *testing.T) {
+	s, _, chat, _ := newTestService(Options{})
+	blank := "  \n"
+	chat.Reply = &blank
+	for _, stream := range []bool{false, true} {
+		req := ChatRequest{DocID: "doc", SessionID: "s1", Question: "q", TopK: 4}
+		var err error
+		if stream {
+			_, err = s.ChatStream(context.Background(), req, func(string) error { return nil })
+		} else {
+			_, err = s.Chat(context.Background(), req)
+		}
+		if !errors.Is(err, ErrEmptyAnswer) {
+			t.Fatalf("stream=%v: err = %v, want ErrEmptyAnswer", stream, err)
+		}
+	}
+	if h := history(t, s, "doc:s1"); len(h) != 0 {
+		t.Fatalf("history = %v; empty turns must not be stored", h)
+	}
+}

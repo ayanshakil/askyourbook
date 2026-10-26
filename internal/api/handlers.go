@@ -92,9 +92,16 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	// multipart.File implements io.ReaderAt, which the PDF loader needs.
 	doc, err := h.svc.Ingest(r.Context(), file, header.Size, header.Filename)
 	switch {
-	case errors.Is(err, rag.ErrInvalidPDF), errors.Is(err, rag.ErrNoText):
+	case errors.Is(err, rag.ErrInvalidPDF):
+		// The parser's own message is logged, not returned.
 		h.log.WarnContext(r.Context(), "rejected upload", "filename", header.Filename, "err", err)
-		writeErr(w, http.StatusUnprocessableEntity, err.Error())
+		writeErr(w, http.StatusUnprocessableEntity, rag.ErrInvalidPDF.Error())
+		return
+	case errors.Is(err, rag.ErrNoText):
+		writeErr(w, http.StatusUnprocessableEntity, rag.ErrNoText.Error())
+		return
+	case errors.Is(err, rag.ErrTooManyChunks):
+		writeErr(w, http.StatusRequestEntityTooLarge, err.Error())
 		return
 	case errors.Is(err, rag.ErrQueueFull), errors.Is(err, rag.ErrShuttingDown):
 		w.Header().Set("Retry-After", "10")
@@ -264,6 +271,8 @@ func (h *Handler) chatError(w http.ResponseWriter, r *http.Request, id string, e
 		writeErr(w, http.StatusNotFound, "document not found")
 	case errors.Is(err, rag.ErrDocumentNotReady):
 		writeErr(w, http.StatusConflict, err.Error())
+	case errors.Is(err, rag.ErrEmptyAnswer):
+		writeErr(w, http.StatusBadGateway, err.Error()+"; try rephrasing the question")
 	case r.Context().Err() != nil:
 		h.log.WarnContext(r.Context(), "chat cancelled", "doc_id", id, "err", err)
 	default:

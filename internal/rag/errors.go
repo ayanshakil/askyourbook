@@ -10,4 +10,6 @@ var (
 	ErrDocumentNotReady = errors.New("document is not ready")
 	ErrQueueFull        = errors.New("ingestion queue is full")
 	ErrShuttingDown     = errors.New("server is shutting down")
+	ErrTooManyChunks    = errors.New("document is too large")
+	ErrEmptyAnswer      = errors.New("the model returned an empty answer")
 )

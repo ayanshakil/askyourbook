@@ -78,6 +78,7 @@ func main() {
 			BatchSize:    cfg.BatchSize,
 			IngestJobs:   cfg.IngestJobs,
 			QueueSize:    cfg.IngestQueue,
+			MaxChunks:    cfg.MaxChunks,
 			Sessions:     sessions,
 			Rewrite:      cfg.RewriteQueries,
 			MinScore:     cfg.ScoreThreshold,

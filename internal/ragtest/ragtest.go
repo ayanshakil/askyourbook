@@ -94,9 +94,11 @@ func (e *Embedder) DocCalls() int { return int(e.calls.Load()) }
 // MaxInFlight is the most EmbedDocuments calls that ran at the same time.
 func (e *Embedder) MaxInFlight() int { return int(e.maxInFlight.Load()) }
 
-// ChatModel answers "the answer", or RewriteReply / RewriteErr for query
-// rewrite requests, streaming the reply in two pieces when asked to.
+// ChatModel answers Reply (default "the answer"), or RewriteReply /
+// RewriteErr for query rewrite requests, streaming the reply in two pieces
+// when asked to.
 type ChatModel struct {
+	Reply        *string
 	RewriteReply string
 	RewriteErr   error
 
@@ -110,6 +112,9 @@ func (c *ChatModel) GenerateContent(ctx context.Context, msgs []llms.MessageCont
 	c.mu.Unlock()
 
 	reply := "the answer"
+	if c.Reply != nil {
+		reply = *c.Reply
+	}
 	if IsRewrite(msgs) {
 		if c.RewriteErr != nil {
 			return nil, c.RewriteErr

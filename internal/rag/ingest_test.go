@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -96,5 +97,18 @@ func TestEmbeddingLimitIsSharedAcrossDocuments(t *testing.T) {
 	}
 	if got := emb.MaxInFlight(); got != 2 {
 		t.Errorf("max concurrent embedding calls across two documents = %d, want 2", got)
+	}
+}
+
+func TestIngestRejectsTooManyChunks(t *testing.T) {
+	s, emb, _, _ := newTestService(Options{MaxChunks: 50})
+	t.Cleanup(func() { s.Shutdown(context.Background()) })
+	f, size := openPDF(t, "cpp_programming_guide.pdf")
+	_, err := s.Ingest(context.Background(), f, size, "guide.pdf")
+	if !errors.Is(err, ErrTooManyChunks) || !strings.Contains(err.Error(), "100 chunks") {
+		t.Fatalf("err = %v", err)
+	}
+	if emb.DocCalls() != 0 {
+		t.Fatal("embedded a rejected document")
 	}
 }

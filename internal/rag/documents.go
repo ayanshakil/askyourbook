@@ -52,7 +52,7 @@ func (s *Service) Document(ctx context.Context, id string) (Document, error) {
 
 // readyDocument fills in an indexed document's details from one of its chunks.
 func (s *Service) readyDocument(ctx context.Context, id string, chunks int) (Document, error) {
-	recs, err := s.qd.Scroll(ctx, s.collection, docFilter(id), 1, "filename", "created_at")
+	recs, err := s.qd.Scroll(ctx, s.collection, docFilter(id), 1, "filename", "created_at", "total_chunks")
 	if err != nil {
 		return Document{}, fmt.Errorf("look up document: %w", err)
 	}
@@ -64,7 +64,24 @@ func (s *Service) readyDocument(ctx context.Context, id string, chunks int) (Doc
 	if ts, ok := recs[0].Payload["created_at"].(string); ok {
 		doc.CreatedAt, _ = time.Parse(time.RFC3339, ts)
 	}
+	// Every chunk records how many the document should have. Fewer means the
+	// ingest was interrupted (e.g. the process was killed) or its cleanup
+	// failed, so the document must not be served as ready.
+	if total := intOf(recs[0].Payload["total_chunks"]); total > chunks {
+		doc.Status = StatusFailed
+		doc.Error = fmt.Sprintf("incomplete: %d of %d chunks indexed; delete it and upload again", chunks, total)
+	}
 	return doc, nil
+}
+
+func intOf(v any) int {
+	switch n := v.(type) {
+	case float64:
+		return int(n)
+	case int:
+		return n
+	}
+	return 0
 }
 
 // ListDocuments returns all documents, newest first: ready ones from Qdrant
@@ -107,7 +124,11 @@ func (s *Service) DeleteDocument(ctx context.Context, id string) error {
 		if d.Status == StatusProcessing {
 			return fmt.Errorf("%w: it is still processing", ErrDocumentNotReady)
 		}
-		s.tracker.remove(id) // failed: nothing is stored
+		// Failed: its chunks were cleaned up, unless that cleanup failed too.
+		if err := s.qd.Delete(ctx, s.collection, docFilter(id)); err != nil {
+			return fmt.Errorf("delete chunks: %w", err)
+		}
+		s.tracker.remove(id)
 		return nil
 	}
 	n, err := s.qd.Count(ctx, s.collection, docFilter(id))
@@ -128,15 +149,12 @@ func (s *Service) DeleteDocument(ctx context.Context, id string) error {
 // ErrDocumentNotReady if it is processing or failed, and
 // ErrDocumentNotFound if it doesn't exist.
 func (s *Service) checkReady(ctx context.Context, id string) error {
-	if d, ok := s.tracker.get(id); ok {
-		return fmt.Errorf("%w: status is %s", ErrDocumentNotReady, d.Status)
-	}
-	recs, err := s.qd.Scroll(ctx, s.collection, docFilter(id), 1)
+	doc, err := s.Document(ctx, id)
 	if err != nil {
-		return fmt.Errorf("look up document: %w", err)
+		return err
 	}
-	if len(recs) == 0 {
-		return ErrDocumentNotFound
+	if doc.Status != StatusReady {
+		return fmt.Errorf("%w: status is %s", ErrDocumentNotReady, doc.Status)
 	}
 	return nil
 }

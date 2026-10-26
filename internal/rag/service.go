@@ -3,6 +3,7 @@ package rag
 import (
 	"context"
 	"log/slog"
+	"math"
 	"sync"
 	"time"
 
@@ -11,8 +12,10 @@ import (
 	"github.com/ayanshakil/askyourbook/internal/session"
 )
 
-// defaultSessionTTL applies when Options.Sessions is nil.
-const defaultSessionTTL = 24 * time.Hour
+const (
+	defaultSessionTTL   = 24 * time.Hour // when Options.Sessions is nil
+	maxConcurrentParses = 2              // PDFs parsed at once; each holds its text in memory
+)
 
 // Options are the Service tunables; see the config package for defaults.
 type Options struct {
@@ -23,6 +26,7 @@ type Options struct {
 	BatchSize    int          // chunks per embedding request
 	IngestJobs   int          // documents indexed concurrently by background workers
 	QueueSize    int          // documents that can wait for a worker
+	MaxChunks    int          // larger documents are rejected (0: no limit)
 	HistoryLen   int          // messages kept per chat session (for the default store)
 	Sessions     SessionStore // nil: in-memory store
 	Rewrite      bool         // rewrite follow-up questions into standalone queries
@@ -38,6 +42,8 @@ type Service struct {
 	splitter   textsplitter.TextSplitter
 	batchSize  int
 	embedSem   chan struct{} // bounds concurrent embedding calls
+	parseSem   chan struct{} // bounds concurrent PDF parsing
+	maxChunks  int
 	sessions   SessionStore
 	rewrite    bool
 	minScore   float64
@@ -64,6 +70,10 @@ func NewService(llm ChatModel, e Embedder, qd VectorStore, opts Options) *Servic
 	if sessions == nil {
 		sessions = session.NewMemory(opts.HistoryLen, defaultSessionTTL)
 	}
+	maxChunks := opts.MaxChunks
+	if maxChunks <= 0 {
+		maxChunks = math.MaxInt
+	}
 	baseCtx, cancel := context.WithCancel(context.Background())
 	s := &Service{
 		llm:        llm,
@@ -76,6 +86,8 @@ func NewService(llm ChatModel, e Embedder, qd VectorStore, opts Options) *Servic
 		),
 		batchSize:  opts.BatchSize,
 		embedSem:   make(chan struct{}, opts.Workers),
+		parseSem:   make(chan struct{}, maxConcurrentParses),
+		maxChunks:  maxChunks,
 		sessions:   sessions,
 		rewrite:    opts.Rewrite,
 		minScore:   opts.MinScore,
